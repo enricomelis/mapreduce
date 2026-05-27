@@ -1,29 +1,31 @@
-CC     = gcc
-CFLAGS = -Wall -Wextra -pedantic -std=c11
-NAME   = main
-SRC_DIR = src
+CC       = gcc
+AR       = ar
+ARFLAGS  = rcs
+CFLAGS   = -Wall -Wextra -pedantic -std=c11
 CPPFLAGS = -Iinclude
-LIBS   = -pthread
-OBJS   = $(SRC_DIR)/$(NAME).o
-ARGS  ?=
 
-.PHONY: run debug release clean
+LIB_NAME  = libmr.a
+SRC_DIR   = src
+BUILD_DIR = build
 
-release: CFLAGS += -O2 -DNDEBUG
-release: $(NAME)
+LIB_SRCS = $(wildcard $(SRC_DIR)/*.c)
+LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CPPFLAGS) -c $(CFLAGS) $< -o $@
+.PHONY: all test clean
 
-$(NAME): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+all: $(LIB_NAME)
 
-run: release
-	./$(NAME) $(ARGS)
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-debug: CFLAGS += -O0 -g3
-debug: $(NAME)
-	gdb ./$(NAME)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(LIB_NAME): $(LIB_OBJS)
+	$(AR) $(ARFLAGS) $@ $^
+
+test: $(LIB_NAME)
+	@echo "Test non ancora implementati"
 
 clean:
-	rm -f $(NAME) $(OBJS)
+	rm -f $(LIB_NAME) $(LIB_OBJS)

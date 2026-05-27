@@ -5,3 +5,4 @@
 - Il testo del progetto si trova dentro `docs/Testo.md`, quella è la fonte di verità in qualsiasi contesto. Solo progetto base, niente addendum.
 - Non creare soluzioni troppo complicate, verifica sempre la comprensione e la capacità d'esposizione del programmatore.
 - Usa sempre `gcc`.
+- Non aggiungere commenti al codice.
