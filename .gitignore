@@ -3,3 +3,5 @@ build/
 libmr.a
 
 docs/checklist
+
+.DS_Store
