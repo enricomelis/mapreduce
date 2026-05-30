@@ -1,16 +1,43 @@
 ---
-Language: Cpp
-BasedOnStyle: LLVM
+Language: C
+# BasedOnStyle:  LLVM
 
+# --- Indentation & Spacing ---
 IndentWidth: 4
-ContinuationIndentWidth: 4
 TabWidth: 4
 UseTab: Never
-
+ContinuationIndentWidth: 4
+IndentCaseLabels: true
 ColumnLimit: 100
 
-PointerAlignment: Right
-SpaceBeforeParens: ControlStatements
-SortIncludes: true
+# --- Alignment ---
+AlignAfterOpenBracket: Align # Align parameters after (
+AlignConsecutiveMacros: true # Aligns values in #define
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Right # Aligns backslashes at end of line
+AlignOperands: Align
+AlignTrailingComments: true
 
-...
+# --- Braces & Wrapping ---
+# 'Attach' keeps open brace on same line (K&R style).
+BreakBeforeBraces: Attach
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfs
+AllowShortLoopsOnASingleLine: false
+
+# --- Sorting & Includes ---
+SortIncludes: true # Sorts #include alphabetically
+IncludeBlocks: Preserve # Keeps empty lines between include groups
+
+# --- Pointers ---
+# Right = int *ptr (Standard C)
+# Left  = int* ptr (C++ style)
+PointerAlignment: Right
+
+# --- Misc ---
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
