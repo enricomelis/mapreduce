@@ -3,6 +3,7 @@ build/
 libmr.a
 
 docs/checklist
+docs/relazione.md
 
 .DS_Store
 **/.DS_Store
