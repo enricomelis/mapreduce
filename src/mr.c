@@ -3,6 +3,14 @@
 #include <stdlib.h>
 #include <threads.h>
 
+#define MR_CHECK_ATTR(attr) \
+    do { \
+        if((attr) == NULL){ \
+            errno = EINVAL; \
+            return -1; \
+        } \
+    } while(0)
+
 struct mr {
     mr_attr_t attr;
     mr_mapper_t mapper;
@@ -198,5 +206,45 @@ int mr_attr_destroy(mr_attr_t *attr){
     attr->queue_size = 0;
     attr->log_file = NULL;
 
+    return 0;
+}
+
+int mr_attr_set_mapper_threads(mr_attr_t *attr, size_t n){
+    MR_CHECK_ATTR(attr);
+    if(n == 0){
+        errno = EINVAL;
+        return -1;
+    }
+
+    attr->mapper_threads = n;
+    return 0;
+}
+
+int mr_attr_set_reducer_threads(mr_attr_t *attr, size_t n){
+    MR_CHECK_ATTR(attr);
+    if(n == 0){
+        errno = EINVAL;
+        return -1;
+    }
+
+    attr->reducer_threads = n;
+    return 0;
+}
+
+int mr_attr_set_queue_size(mr_attr_t *attr, size_t n){
+    MR_CHECK_ATTR(attr);
+    if(n == 0){
+        errno = EINVAL;
+        return -1;
+    }
+
+    attr->queue_size = n;
+    return 0;
+}
+
+int mr_attr_set_log_file(mr_attr_t *attr, const char *path){
+    MR_CHECK_ATTR(attr);
+
+    attr->log_file = path;
     return 0;
 }
