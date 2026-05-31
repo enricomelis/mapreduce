@@ -18,6 +18,7 @@ typedef struct {
     size_t line_len;
 } mr_line_item_t;
 
+/* ====================================================================== */
 /* coda per pattern produttore-consumatore nei thread del processo mapper */
 typedef struct {
     mr_line_item_t *items;
@@ -168,4 +169,34 @@ static void line_queue_close(mr_line_queue_t *queue){
     cnd_broadcast(&queue->not_empty);
     cnd_broadcast(&queue->not_full);
     mtx_unlock(&queue->lock);
+}
+
+/* ====================================================================== */
+
+int mr_attr_init(mr_attr_t *attr){
+    if(attr == NULL){
+        errno = EINVAL;
+        return -1;
+    }
+    
+    attr->mapper_threads = 1;
+    attr->reducer_threads = 1;
+    attr->queue_size = 64;
+    attr->log_file = NULL;
+    
+    return 0;
+}
+
+int mr_attr_destroy(mr_attr_t *attr){
+    if(attr == NULL){
+        errno = EINVAL;
+        return -1;
+    }
+
+    attr->mapper_threads = 0;
+    attr->reducer_threads = 0;
+    attr->queue_size = 0;
+    attr->log_file = NULL;
+
+    return 0;
 }
