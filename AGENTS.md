@@ -6,4 +6,5 @@
 - Il testo del progetto si trova dentro `docs/Testo.md`, quella è la fonte di verità in qualsiasi contesto. Solo progetto base, niente addendum.
 - Non creare soluzioni troppo complicate, verifica sempre la comprensione e la capacità d'esposizione del programmatore.
 - Usa sempre `gcc`.
-- Non aggiungere commenti al codice.
+- Non aggiungere commenti al codice in autonomia. I commenti li aggiungo io, limitati e valutarne la loro utilità.
+- Non eseguire i comandi `make` dato che tutto viene sviluppato in un dev container e falliscono su questa macchina. Quando c'è la necessità, comunica e io eseguirò i comandi.
