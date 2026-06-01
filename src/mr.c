@@ -2,6 +2,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <threads.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define MR_CHECK_NULL(attr) \
     do { \
@@ -297,3 +299,62 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path){
 }
 
 /* ====================================================================== */
+/* funzioni readn() e writen() */
+
+static ssize_t readn(int fd, void *buf, size_t n){
+    char *p = buf;
+    size_t total = 0;
+
+    while(total < n){
+        ssize_t act = read(fd, p + total, n - total);
+
+        if(act > 0){
+            total += (size_t)act;
+            continue;
+        }
+
+        if(act == 0){
+            if(total == 0){
+                return 0;
+            }
+
+            errno = EPROTO;
+            return -1;
+        }
+
+        if(errno == EINTR){
+            continue;
+        }
+
+        return -1;
+    }
+
+    return (ssize_t)total;
+}
+
+static ssize_t writen(int fd, const void *buf, size_t n){
+    const char *p = buf;
+    size_t total = 0;
+
+    while(total < n){
+        ssize_t act = write(fd, p + total, n - total);
+
+        if(act > 0){
+            total += (size_t)act;
+            continue;
+        }
+
+        if(act == 0){
+            errno = EIO;
+            return -1;
+        }
+
+        if(errno == EINTR){
+            continue;
+        }
+
+        return -1;
+    }
+
+    return (ssize_t)total;
+}

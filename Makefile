@@ -14,6 +14,7 @@ LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 TEST_ATTR = $(BUILD_DIR)/test_attr
 TEST_LIFECYCLE = $(BUILD_DIR)/test_lifecycle
 TEST_START = $(BUILD_DIR)/test_start
+TEST_IO = $(BUILD_DIR)/test_io
 
 .PHONY: all test clean
 
@@ -28,10 +29,11 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 $(LIB_NAME): $(LIB_OBJS)
 	$(AR) $(ARFLAGS) $@ $^
 
-test: $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START)
+test: $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO)
 	./$(TEST_ATTR)
 	./$(TEST_LIFECYCLE)
 	./$(TEST_START)
+	./$(TEST_IO)
 
 $(TEST_ATTR): $(TEST_DIR)/test_attr.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
@@ -42,5 +44,8 @@ $(TEST_LIFECYCLE): $(TEST_DIR)/test_lifecycle.c $(LIB_NAME) | $(BUILD_DIR)
 $(TEST_START): $(TEST_DIR)/test_start.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
+$(TEST_IO): $(TEST_DIR)/test_io.c $(SRC_DIR)/mr.c include/mr.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
 clean:
-	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START)
+	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO)
