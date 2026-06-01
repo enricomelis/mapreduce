@@ -12,6 +12,7 @@ TEST_DIR  = tests
 LIB_SRCS = $(wildcard $(SRC_DIR)/*.c)
 LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 TEST_ATTR = $(BUILD_DIR)/test_attr
+TEST_LIFECYCLE = $(BUILD_DIR)/test_lifecycle
 
 .PHONY: all test clean
 
@@ -26,11 +27,15 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
 $(LIB_NAME): $(LIB_OBJS)
 	$(AR) $(ARFLAGS) $@ $^
 
-test: $(TEST_ATTR)
+test: $(TEST_ATTR) $(TEST_LIFECYCLE)
 	./$(TEST_ATTR)
+	./$(TEST_LIFECYCLE)
 
 $(TEST_ATTR): $(TEST_DIR)/test_attr.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
+$(TEST_LIFECYCLE): $(TEST_DIR)/test_lifecycle.c $(LIB_NAME) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
+
 clean:
-	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR)
+	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE)
