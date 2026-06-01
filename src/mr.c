@@ -180,6 +180,7 @@ static void line_queue_close(mr_line_queue_t *queue){
 }
 
 /* ====================================================================== */
+/* gestione di mr_attr_** */
 
 int mr_attr_init(mr_attr_t *attr){
     if(attr == NULL){
@@ -249,6 +250,9 @@ int mr_attr_set_log_file(mr_attr_t *attr, const char *path){
     return 0;
 }
 
+/* ====================================================================== */
+/* gestione di mr_create, mr_destroy e mr_start */
+
 int mr_create(mr_t *mr, const mr_attr_t *attr, mr_mapper_t mapper, mr_reducer_t reducer, void *user_arg){
     MR_CHECK_NULL(mr);
     MR_CHECK_NULL(attr);
@@ -282,3 +286,14 @@ int mr_destroy(mr_t mr){
     free(mr);
     return 0;
 }
+
+int mr_start(mr_t mr, const char *input_path, const char *output_path){
+    MR_CHECK_NULL(mr);
+    MR_CHECK_NULL(input_path);
+    MR_CHECK_NULL(output_path);
+
+    errno = ENOSYS;
+    return -1;
+}
+
+/* ====================================================================== */
