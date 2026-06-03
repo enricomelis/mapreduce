@@ -1,5 +1,6 @@
 #include "mr.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <threads.h>
 #include <sys/types.h>
@@ -27,6 +28,12 @@ typedef struct {
     char *line;
     size_t line_len;
 } mr_line_item_t;
+
+typedef struct {
+    int file_name_len;
+    unsigned long line_number;
+    int line_len;
+} mr_line_header_t;
 
 /* ====================================================================== */
 /* coda per pattern produttore-consumatore nei thread del processo mapper */
@@ -357,4 +364,102 @@ static ssize_t writen(int fd, const void *buf, size_t n){
     }
 
     return (ssize_t)total;
+}
+
+/* valori di return
+ * `-1`: errore
+ * `0`: record scritto
+ */
+static int write_line_record(int fd, const mr_line_item_t *item){
+    mr_line_header_t header;
+
+    if(item == NULL){
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(item->file_name_len > INT_MAX || item->line_len > INT_MAX){
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    if((item->file_name_len > 0 && item->file_name == NULL) ||
+       (item->line_len > 0 && item->line == NULL)){
+        errno = EINVAL;
+        return -1;
+    }
+
+    header.file_name_len = (int)item->file_name_len;
+    header.line_number = item->line_number;
+    header.line_len = (int)item->line_len;
+
+    if(writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)){ return -1; }
+
+    if(item->file_name_len > 0 && writen(fd, item->file_name, item->file_name_len) != (ssize_t)item->file_name_len){
+        return -1;
+    }
+
+    if(item->line_len > 0 && writen(fd, item->line, item->line_len) != (ssize_t)item->line_len){
+        return -1;
+    }
+
+    return 0;
+}
+
+/* valori di return
+ * `-1`: errore
+ * `0`: EOF pulito
+ * `1`: record letto
+ */
+static int read_line_record(int fd, mr_line_item_t *out){
+    mr_line_header_t header;
+
+    if(out == NULL){
+        errno = EINVAL;
+        return -1;
+    }
+
+    ssize_t n_read = readn(fd, &header, sizeof(header));
+    
+    if(n_read == 0){ return 0; }
+    if(n_read == -1) { return -1; }
+    
+    if(header.file_name_len < 0 || header.line_len < 0){
+        errno = EPROTO;
+        return -1;
+    }
+    
+    size_t file_name_len = (size_t)header.file_name_len;
+    size_t line_len = (size_t)header.line_len;
+
+    char *file_name;
+    char *line;
+    if((file_name = malloc(file_name_len + 1)) == NULL){ return -1; }
+    if((line = malloc(line_len + 1)) == NULL){
+        free(file_name);
+        return -1;
+    }
+    
+    if(file_name_len > 0 && readn(fd, file_name, file_name_len) != (ssize_t)file_name_len){
+        free(file_name);
+        free(line);
+        return -1;
+    }
+
+    if(line_len > 0 && readn(fd, line, line_len) != (ssize_t)line_len){
+        free(file_name);
+        free(line);
+        return -1;
+    }
+
+    file_name[file_name_len] = '\0';
+    line[line_len] = '\0';
+    
+    out->file_name = file_name;
+    out->file_name_len = file_name_len;
+    out->line_number = header.line_number;
+    out->line = line;
+    out->line_len = line_len;
+
+    return 1;
 }
