@@ -1,0 +1,4 @@
+interface:
+  display_name: "MapReduce Session Start"
+  short_description: "Avvia una sessione MapReduce"
+  default_prompt: "Use $mapreduce-session-start to review the project state before programming."

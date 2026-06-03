@@ -1,0 +1,4 @@
+interface:
+  display_name: "MapReduce Session End"
+  short_description: "Chiude una sessione MapReduce"
+  default_prompt: "Use $mapreduce-session-end to summarize progress and draft the project diary update."
