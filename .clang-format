@@ -1,6 +1,6 @@
 ---
-Language: C
-# BasedOnStyle:  LLVM
+Language: Cpp
+BasedOnStyle: LLVM
 
 # --- Indentation & Spacing ---
 IndentWidth: 4
@@ -8,7 +8,7 @@ TabWidth: 4
 UseTab: Never
 ContinuationIndentWidth: 4
 IndentCaseLabels: true
-ColumnLimit: 100
+ColumnLimit: 120
 
 # --- Alignment ---
 AlignAfterOpenBracket: Align # Align parameters after (
@@ -25,8 +25,10 @@ BreakBeforeBraces: Attach
 AllowShortBlocksOnASingleLine: Always
 AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: All
-AllowShortIfStatementsOnASingleLine: AllIfs
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
 AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+BinPackParameters: true
 
 # --- Sorting & Includes ---
 SortIncludes: true # Sorts #include alphabetically
@@ -38,6 +40,7 @@ IncludeBlocks: Preserve # Keeps empty lines between include groups
 PointerAlignment: Right
 
 # --- Misc ---
+Cpp11BracedListStyle: false
 SpaceAfterCStyleCast: false
 SpaceBeforeAssignmentOperators: true
 SpaceBeforeParens: ControlStatements

@@ -2,17 +2,17 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdlib.h>
-#include <threads.h>
 #include <sys/types.h>
+#include <threads.h>
 #include <unistd.h>
 
-#define MR_CHECK_NULL(attr) \
-    do { \
-        if((attr) == NULL){ \
-            errno = EINVAL; \
-            return -1; \
-        } \
-    } while(0)
+#define MR_CHECK_NULL(attr)                                                                                            \
+    do {                                                                                                               \
+        if ((attr) == NULL) {                                                                                          \
+            errno = EINVAL;                                                                                            \
+            return -1;                                                                                                 \
+        }                                                                                                              \
+    } while (0)
 
 struct mr {
     mr_attr_t attr;
@@ -49,15 +49,18 @@ typedef struct {
     cnd_t not_full;
 } mr_line_queue_t;
 
-/* 
- * inizializzazione della coda: 
+/*
+ * inizializzazione della coda:
  * 1. controllo input invalidi
  * 2. allocazione memoria dinamica inizializzata
  * 3. campi della struct
  * 4. strutture di sincronizzazione con eventuale distruzione dei precedenti
-*/
+ */
 static int line_queue_init(mr_line_queue_t *queue, size_t capacity) {
-    if (capacity == 0 || queue == NULL) { errno = EINVAL; return -1; }
+    if (capacity == 0 || queue == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
 
     if ((queue->items = calloc(capacity, sizeof(mr_line_item_t))) == NULL) { return -1; }
 
@@ -67,22 +70,22 @@ static int line_queue_init(mr_line_queue_t *queue, size_t capacity) {
     queue->count = 0;
     queue->closed = 0;
 
-    if(mtx_init(&queue->lock, mtx_plain) != thrd_success){ 
-        free(queue->items); 
-        return -1; 
+    if (mtx_init(&queue->lock, mtx_plain) != thrd_success) {
+        free(queue->items);
+        return -1;
     }
 
-    if(cnd_init(&queue->not_empty) != thrd_success){ 
-        mtx_destroy(&queue->lock); 
-        free(queue->items); 
-        return -1; 
+    if (cnd_init(&queue->not_empty) != thrd_success) {
+        mtx_destroy(&queue->lock);
+        free(queue->items);
+        return -1;
     }
 
-    if(cnd_init(&queue->not_full) != thrd_success){ 
-        cnd_destroy(&queue->not_empty); 
-        mtx_destroy(&queue->lock); 
-        free(queue->items); 
-        return -1; 
+    if (cnd_init(&queue->not_full) != thrd_success) {
+        cnd_destroy(&queue->not_empty);
+        mtx_destroy(&queue->lock);
+        free(queue->items);
+        return -1;
     }
 
     return 0;
@@ -93,11 +96,11 @@ static int line_queue_init(mr_line_queue_t *queue, size_t capacity) {
  * 2. free circolare sugli elementi validi della coda
  * 3. distruzione delle strutture e azzeramento dei campi
  */
-static void line_queue_destroy(mr_line_queue_t *queue){
-    if(queue == NULL){ return; }
+static void line_queue_destroy(mr_line_queue_t *queue) {
+    if (queue == NULL) { return; }
 
-    if(queue->items != NULL && queue->capacity > 0){
-        for(size_t i = 0; i < queue->count; i++){
+    if (queue->items != NULL && queue->capacity > 0) {
+        for (size_t i = 0; i < queue->count; i++) {
             size_t index = (queue->head + i) % queue->capacity;
             free(queue->items[index].file_name);
             free(queue->items[index].line);
@@ -117,19 +120,22 @@ static void line_queue_destroy(mr_line_queue_t *queue){
     queue->closed = 1;
 }
 
-static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t item){
-    if(queue == NULL){ errno = EINVAL; return -1; }
+static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t item) {
+    if (queue == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    if(mtx_lock(&queue->lock) != thrd_success){ return -1; }
+    if (mtx_lock(&queue->lock) != thrd_success) { return -1; }
 
-    while(queue->count == queue->capacity && !queue->closed){
-        if(cnd_wait(&queue->not_full, &queue->lock) != thrd_success){
+    while (queue->count == queue->capacity && !queue->closed) {
+        if (cnd_wait(&queue->not_full, &queue->lock) != thrd_success) {
             mtx_unlock(&queue->lock);
             return -1;
         }
     }
 
-    if(queue->closed){
+    if (queue->closed) {
         mtx_unlock(&queue->lock);
         errno = EPIPE;
         return -1;
@@ -146,29 +152,32 @@ static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t item){
 }
 
 /* valori di return
-* `-1`: errore
-* `1`: item estratto
-* `0`: coda chiusa e vuota
-*/
-static int line_queue_pop(mr_line_queue_t *queue, mr_line_item_t *item){
-    if(queue == NULL || item == NULL){ errno = EINVAL; return -1; }
+ * `-1`: errore
+ * `1`: item estratto
+ * `0`: coda chiusa e vuota
+ */
+static int line_queue_pop(mr_line_queue_t *queue, mr_line_item_t *item) {
+    if (queue == NULL || item == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    if(mtx_lock(&queue->lock) != thrd_success){ return -1; }
+    if (mtx_lock(&queue->lock) != thrd_success) { return -1; }
 
-    while(queue->count == 0 && !queue->closed){
-        if(cnd_wait(&queue->not_empty, &queue->lock) != thrd_success){
+    while (queue->count == 0 && !queue->closed) {
+        if (cnd_wait(&queue->not_empty, &queue->lock) != thrd_success) {
             mtx_unlock(&queue->lock);
             return -1;
         }
     }
 
-    if(queue->count == 0 && queue->closed){
+    if (queue->count == 0 && queue->closed) {
         mtx_unlock(&queue->lock);
         return 0;
     }
 
     *item = queue->items[queue->head];
-    queue->items[queue->head] = (mr_line_item_t){0};
+    queue->items[queue->head] = (mr_line_item_t){ 0 };
     queue->head = (queue->head + 1) % queue->capacity;
     queue->count--;
 
@@ -178,8 +187,8 @@ static int line_queue_pop(mr_line_queue_t *queue, mr_line_item_t *item){
     return 1;
 }
 
-static void line_queue_close(mr_line_queue_t *queue){
-    if(queue == NULL){ return; }
+static void line_queue_close(mr_line_queue_t *queue) {
+    if (queue == NULL) { return; }
 
     mtx_lock(&queue->lock);
     queue->closed = 1;
@@ -191,22 +200,22 @@ static void line_queue_close(mr_line_queue_t *queue){
 /* ====================================================================== */
 /* gestione di mr_attr_** */
 
-int mr_attr_init(mr_attr_t *attr){
-    if(attr == NULL){
+int mr_attr_init(mr_attr_t *attr) {
+    if (attr == NULL) {
         errno = EINVAL;
         return -1;
     }
-    
+
     attr->mapper_threads = 1;
     attr->reducer_threads = 1;
     attr->queue_size = 64;
     attr->log_file = NULL;
-    
+
     return 0;
 }
 
-int mr_attr_destroy(mr_attr_t *attr){
-    if(attr == NULL){
+int mr_attr_destroy(mr_attr_t *attr) {
+    if (attr == NULL) {
         errno = EINVAL;
         return -1;
     }
@@ -219,9 +228,9 @@ int mr_attr_destroy(mr_attr_t *attr){
     return 0;
 }
 
-int mr_attr_set_mapper_threads(mr_attr_t *attr, size_t n){
+int mr_attr_set_mapper_threads(mr_attr_t *attr, size_t n) {
     MR_CHECK_NULL(attr);
-    if(n == 0){
+    if (n == 0) {
         errno = EINVAL;
         return -1;
     }
@@ -230,9 +239,9 @@ int mr_attr_set_mapper_threads(mr_attr_t *attr, size_t n){
     return 0;
 }
 
-int mr_attr_set_reducer_threads(mr_attr_t *attr, size_t n){
+int mr_attr_set_reducer_threads(mr_attr_t *attr, size_t n) {
     MR_CHECK_NULL(attr);
-    if(n == 0){
+    if (n == 0) {
         errno = EINVAL;
         return -1;
     }
@@ -241,9 +250,9 @@ int mr_attr_set_reducer_threads(mr_attr_t *attr, size_t n){
     return 0;
 }
 
-int mr_attr_set_queue_size(mr_attr_t *attr, size_t n){
+int mr_attr_set_queue_size(mr_attr_t *attr, size_t n) {
     MR_CHECK_NULL(attr);
-    if(n == 0){
+    if (n == 0) {
         errno = EINVAL;
         return -1;
     }
@@ -252,7 +261,7 @@ int mr_attr_set_queue_size(mr_attr_t *attr, size_t n){
     return 0;
 }
 
-int mr_attr_set_log_file(mr_attr_t *attr, const char *path){
+int mr_attr_set_log_file(mr_attr_t *attr, const char *path) {
     MR_CHECK_NULL(attr);
 
     attr->log_file = path;
@@ -262,7 +271,7 @@ int mr_attr_set_log_file(mr_attr_t *attr, const char *path){
 /* ====================================================================== */
 /* gestione di mr_create, mr_destroy e mr_start */
 
-int mr_create(mr_t *mr, const mr_attr_t *attr, mr_mapper_t mapper, mr_reducer_t reducer, void *user_arg){
+int mr_create(mr_t *mr, const mr_attr_t *attr, mr_mapper_t mapper, mr_reducer_t reducer, void *user_arg) {
     MR_CHECK_NULL(mr);
     MR_CHECK_NULL(attr);
     MR_CHECK_NULL(mapper);
@@ -270,15 +279,13 @@ int mr_create(mr_t *mr, const mr_attr_t *attr, mr_mapper_t mapper, mr_reducer_t 
 
     *mr = NULL;
 
-    if(attr->mapper_threads == 0 || attr->reducer_threads == 0 || attr->queue_size == 0){
+    if (attr->mapper_threads == 0 || attr->reducer_threads == 0 || attr->queue_size == 0) {
         errno = EINVAL;
         return -1;
     }
 
     mr_t mapreduce = malloc(sizeof(*mapreduce));
-    if(mapreduce == NULL){
-        return -1;
-    }
+    if (mapreduce == NULL) { return -1; }
 
     mapreduce->attr = *attr;
     mapreduce->mapper = mapper;
@@ -289,14 +296,14 @@ int mr_create(mr_t *mr, const mr_attr_t *attr, mr_mapper_t mapper, mr_reducer_t 
     return 0;
 }
 
-int mr_destroy(mr_t mr){
+int mr_destroy(mr_t mr) {
     MR_CHECK_NULL(mr);
 
     free(mr);
     return 0;
 }
 
-int mr_start(mr_t mr, const char *input_path, const char *output_path){
+int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     MR_CHECK_NULL(mr);
     MR_CHECK_NULL(input_path);
     MR_CHECK_NULL(output_path);
@@ -308,30 +315,26 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path){
 /* ====================================================================== */
 /* funzioni readn() e writen() */
 
-static ssize_t readn(int fd, void *buf, size_t n){
+static ssize_t readn(int fd, void *buf, size_t n) {
     char *p = buf;
     size_t total = 0;
 
-    while(total < n){
+    while (total < n) {
         ssize_t act = read(fd, p + total, n - total);
 
-        if(act > 0){
+        if (act > 0) {
             total += (size_t)act;
             continue;
         }
 
-        if(act == 0){
-            if(total == 0){
-                return 0;
-            }
+        if (act == 0) {
+            if (total == 0) { return 0; }
 
             errno = EPROTO;
             return -1;
         }
 
-        if(errno == EINTR){
-            continue;
-        }
+        if (errno == EINTR) { continue; }
 
         return -1;
     }
@@ -339,26 +342,24 @@ static ssize_t readn(int fd, void *buf, size_t n){
     return (ssize_t)total;
 }
 
-static ssize_t writen(int fd, const void *buf, size_t n){
+static ssize_t writen(int fd, const void *buf, size_t n) {
     const char *p = buf;
     size_t total = 0;
 
-    while(total < n){
+    while (total < n) {
         ssize_t act = write(fd, p + total, n - total);
 
-        if(act > 0){
+        if (act > 0) {
             total += (size_t)act;
             continue;
         }
 
-        if(act == 0){
+        if (act == 0) {
             errno = EIO;
             return -1;
         }
 
-        if(errno == EINTR){
-            continue;
-        }
+        if (errno == EINTR) { continue; }
 
         return -1;
     }
@@ -370,21 +371,20 @@ static ssize_t writen(int fd, const void *buf, size_t n){
  * `-1`: errore
  * `0`: record scritto
  */
-static int write_line_record(int fd, const mr_line_item_t *item){
+static int write_line_record(int fd, const mr_line_item_t *item) {
     mr_line_header_t header;
 
-    if(item == NULL){
+    if (item == NULL) {
         errno = EINVAL;
         return -1;
     }
 
-    if(item->file_name_len > INT_MAX || item->line_len > INT_MAX){
+    if (item->file_name_len > INT_MAX || item->line_len > INT_MAX) {
         errno = EOVERFLOW;
         return -1;
     }
 
-    if((item->file_name_len > 0 && item->file_name == NULL) ||
-       (item->line_len > 0 && item->line == NULL)){
+    if ((item->file_name_len > 0 && item->file_name == NULL) || (item->line_len > 0 && item->line == NULL)) {
         errno = EINVAL;
         return -1;
     }
@@ -393,15 +393,13 @@ static int write_line_record(int fd, const mr_line_item_t *item){
     header.line_number = item->line_number;
     header.line_len = (int)item->line_len;
 
-    if(writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)){ return -1; }
+    if (writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) { return -1; }
 
-    if(item->file_name_len > 0 && writen(fd, item->file_name, item->file_name_len) != (ssize_t)item->file_name_len){
+    if (item->file_name_len > 0 && writen(fd, item->file_name, item->file_name_len) != (ssize_t)item->file_name_len) {
         return -1;
     }
 
-    if(item->line_len > 0 && writen(fd, item->line, item->line_len) != (ssize_t)item->line_len){
-        return -1;
-    }
+    if (item->line_len > 0 && writen(fd, item->line, item->line_len) != (ssize_t)item->line_len) { return -1; }
 
     return 0;
 }
@@ -411,42 +409,42 @@ static int write_line_record(int fd, const mr_line_item_t *item){
  * `0`: EOF pulito
  * `1`: record letto
  */
-static int read_line_record(int fd, mr_line_item_t *out){
+static int read_line_record(int fd, mr_line_item_t *out) {
     mr_line_header_t header;
 
-    if(out == NULL){
+    if (out == NULL) {
         errno = EINVAL;
         return -1;
     }
 
     ssize_t n_read = readn(fd, &header, sizeof(header));
-    
-    if(n_read == 0){ return 0; }
-    if(n_read == -1) { return -1; }
-    
-    if(header.file_name_len < 0 || header.line_len < 0){
+
+    if (n_read == 0) { return 0; }
+    if (n_read == -1) { return -1; }
+
+    if (header.file_name_len < 0 || header.line_len < 0) {
         errno = EPROTO;
         return -1;
     }
-    
+
     size_t file_name_len = (size_t)header.file_name_len;
     size_t line_len = (size_t)header.line_len;
 
     char *file_name;
     char *line;
-    if((file_name = malloc(file_name_len + 1)) == NULL){ return -1; }
-    if((line = malloc(line_len + 1)) == NULL){
+    if ((file_name = malloc(file_name_len + 1)) == NULL) { return -1; }
+    if ((line = malloc(line_len + 1)) == NULL) {
         free(file_name);
         return -1;
     }
-    
-    if(file_name_len > 0 && readn(fd, file_name, file_name_len) != (ssize_t)file_name_len){
+
+    if (file_name_len > 0 && readn(fd, file_name, file_name_len) != (ssize_t)file_name_len) {
         free(file_name);
         free(line);
         return -1;
     }
 
-    if(line_len > 0 && readn(fd, line, line_len) != (ssize_t)line_len){
+    if (line_len > 0 && readn(fd, line, line_len) != (ssize_t)line_len) {
         free(file_name);
         free(line);
         return -1;
@@ -454,7 +452,7 @@ static int read_line_record(int fd, mr_line_item_t *out){
 
     file_name[file_name_len] = '\0';
     line[line_len] = '\0';
-    
+
     out->file_name = file_name;
     out->file_name_len = file_name_len;
     out->line_number = header.line_number;
