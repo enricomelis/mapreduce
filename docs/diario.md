@@ -10,8 +10,10 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 - La gestione degli attributi e del ciclo di vita base (`mr_create`, `mr_destroy`) e implementata in `src/mr.c`.
 - `mr_start` valida i parametri, ma non avvia ancora la pipeline MapReduce.
 - Sono presenti funzioni interne `readn` e `writen` per gestire letture e scritture complete su file descriptor.
-- E presente una prima coda circolare protetta con `mtx_t` e `cnd_t` per il pattern produttore-consumatore nel mapper.
-- I test coprono attributi, ciclo di vita, comportamento provvisorio di `mr_start` e funzioni di I/O interne.
+- È stato introdotto il formato interno per serializzare le righe dal processo principale al mapper: header con lunghezze e numero di riga, seguito dai byte di nome file e riga.
+- Sono presenti le funzioni interne `write_line_record` e `read_line_record` per scrivere e leggere record di riga su file descriptor.
+- È presente una prima coda circolare protetta con `mtx_t` e `cnd_t` per il pattern produttore-consumatore nel mapper.
+- I test coprono attributi, ciclo di vita, comportamento provvisorio di `mr_start`, funzioni di I/O interne e serializzazione/deserializzazione delle righe.
 
 ### Requisiti da tenere fermi
 
@@ -25,15 +27,14 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 
 ### Prossimi passi ragionevoli
 
-1. Definire il formato binario interno per righe, coppie intermedie e risultati.
-2. Completare le funzioni di serializzazione e deserializzazione usando `readn` e `writen`.
-3. Implementare la lettura dell'input: file singolo, poi directory non ricorsiva in ordine lessicografico.
-4. Costruire la pipeline di processi dentro `mr_start`.
-5. Implementare il processo mapper con thread lettore, coda righe e worker mapper.
-6. Implementare il processo reducer con raggruppamento per token e worker reducer.
-7. Scrivere il formato di output finale e documentarlo.
-8. Aggiungere il log di esecuzione.
-9. Aggiungere almeno un esempio applicativo, preferibilmente il conteggio dei token.
+1. Definire il formato binario interno per coppie intermedie e risultati.
+2. Implementare la lettura dell'input: file singolo, poi directory non ricorsiva in ordine lessicografico.
+3. Costruire la pipeline di processi dentro `mr_start`.
+4. Implementare il processo mapper con thread lettore, coda righe e worker mapper.
+5. Implementare il processo reducer con raggruppamento per token e worker reducer.
+6. Scrivere il formato di output finale e documentarlo.
+7. Aggiungere il log di esecuzione.
+8. Aggiungere almeno un esempio applicativo, preferibilmente il conteggio dei token.
 
 ### Punti da saper spiegare
 
