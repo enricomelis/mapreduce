@@ -41,13 +41,39 @@ static void free_line_item(mr_line_item_t *item) {
     *item = (mr_line_item_t){0};
 }
 
+static int expect_line_record(int fd, const char *file_name, unsigned long line_number,
+                              const char *line) {
+    mr_line_item_t item = {0};
+    int failures = 0;
+    int status = read_line_record(fd, &item);
+
+    if (status != 1) {
+        return expect_int(0, "write_file_lines deve produrre il record atteso");
+    }
+
+    failures += expect_int(strcmp(item.file_name, file_name) == 0,
+                           "write_file_lines deve preservare il nome file logico");
+    failures += expect_int(item.line_number == line_number,
+                           "write_file_lines deve numerare correttamente le righe");
+    failures += expect_int(item.line_len == strlen(line),
+                           "write_file_lines deve calcolare correttamente line_len");
+    failures += expect_int(strcmp(item.line, line) == 0,
+                           "write_file_lines deve scrivere la riga senza newline finale");
+
+    free_line_item(&item);
+    return failures;
+}
+
 int main(void) {
     int pipefd[2] = {-1, -1};
+    char input_path[] = "/tmp/mr-test-XXXXXX";
     const char message[] = "record-binario";
+    const char input_content[] = "alpha\n\nbeta\ngamma";
     char buffer[sizeof(message)] = {0};
     char partial[8] = {0};
     mr_line_item_t line_item = {0};
     mr_line_item_t line_out = {0};
+    int input_fd = -1;
     int failures = 0;
 
     failures += expect_int(pipe(pipefd) == 0, "pipe deve riuscire");
@@ -162,6 +188,40 @@ int main(void) {
                            "read_line_record su record riga troncato deve impostare EPROTO");
     failures += expect_int(close_pair(pipefd) == 0,
                            "close pipe record riga troncato deve riuscire");
+
+    input_fd = mkstemp(input_path);
+    failures += expect_int(input_fd != -1, "mkstemp per write_file_lines deve riuscire");
+    if (input_fd != -1) {
+        failures += expect_int(writen(input_fd, input_content, strlen(input_content)) ==
+                                   (ssize_t)strlen(input_content),
+                               "scrittura file temporaneo per write_file_lines deve riuscire");
+        failures += expect_int(close(input_fd) == 0,
+                               "chiusura file temporaneo per write_file_lines deve riuscire");
+        input_fd = -1;
+
+        pipefd[0] = -1;
+        pipefd[1] = -1;
+        failures += expect_int(pipe(pipefd) == 0, "pipe write_file_lines deve riuscire");
+        if (pipefd[0] != -1 && pipefd[1] != -1) {
+            failures += expect_int(write_file_lines(pipefd[1], input_path, "input.txt") == 0,
+                                   "write_file_lines deve scrivere tutte le righe del file");
+            failures += expect_int(close(pipefd[1]) == 0,
+                                   "chiusura lato scrittura write_file_lines deve riuscire");
+            pipefd[1] = -1;
+
+            failures += expect_line_record(pipefd[0], "input.txt", 1, "alpha");
+            failures += expect_line_record(pipefd[0], "input.txt", 2, "");
+            failures += expect_line_record(pipefd[0], "input.txt", 3, "beta");
+            failures += expect_line_record(pipefd[0], "input.txt", 4, "gamma");
+            failures += expect_int(read_line_record(pipefd[0], &line_out) == 0,
+                                   "write_file_lines deve terminare con EOF pulito");
+            failures += expect_int(close_pair(pipefd) == 0,
+                                   "close pipe write_file_lines deve riuscire");
+        }
+
+        failures += expect_int(unlink(input_path) == 0,
+                               "rimozione file temporaneo write_file_lines deve riuscire");
+    }
 
     if (failures != 0) {
         fprintf(stderr, "%d controlli falliti\n", failures);
