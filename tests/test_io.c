@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,8 +36,8 @@ static void free_line_item(mr_line_item_t *item) {
         return;
     }
 
-    free(item->file_name);
-    free(item->line);
+    free((void *)item->file_name);
+    free((void *)item->line);
     *item = (mr_line_item_t){0};
 }
 

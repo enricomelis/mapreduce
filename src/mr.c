@@ -1,7 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "mr.h"
 #include <errno.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <threads.h>
 #include <unistd.h>
@@ -22,10 +26,10 @@ struct mr {
 };
 
 typedef struct {
-    char *file_name;
+    const char *file_name;
     size_t file_name_len;
     unsigned long line_number;
-    char *line;
+    const char *line;
     size_t line_len;
 } mr_line_item_t;
 
@@ -102,8 +106,8 @@ static void line_queue_destroy(mr_line_queue_t *queue) {
     if (queue->items != NULL && queue->capacity > 0) {
         for (size_t i = 0; i < queue->count; i++) {
             size_t index = (queue->head + i) % queue->capacity;
-            free(queue->items[index].file_name);
-            free(queue->items[index].line);
+            free((void *)queue->items[index].file_name);
+            free((void *)queue->items[index].line);
         }
     }
 
@@ -460,4 +464,56 @@ static int read_line_record(int fd, mr_line_item_t *out) {
     out->line_len = line_len;
 
     return 1;
+}
+
+static int write_file_lines(int out_fd, const char *path, const char *file_name) {
+    if (path == NULL || file_name == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL) { return -1; }
+
+    mr_line_item_t item = { 0 };
+
+    unsigned long line_num = 1;
+    char *line = NULL;
+    size_t capacity = 0;
+    ssize_t n_read = 0;
+    size_t file_name_len = strlen(file_name);
+
+    while ((n_read = getline(&line, &capacity, fp)) != -1) {
+        size_t line_len = (size_t)n_read;
+        if (line_len > 0 && line[line_len - 1] == '\n') { line_len--; }
+
+        item.file_name = file_name;
+        item.file_name_len = file_name_len;
+        item.line = line;
+        item.line_len = line_len;
+        item.line_number = line_num;
+
+        line_num++;
+
+        if (write_line_record(out_fd, &item) == -1) {
+            int saved_errno = errno;
+            free(line);
+            fclose(fp);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+
+    if (ferror(fp)) {
+        int saved_errno = errno != 0 ? errno : EIO;
+        free(line);
+        fclose(fp);
+        errno = saved_errno;
+        return -1;
+    }
+
+    free(line);
+    if (fclose(fp) == EOF) { return -1; }
+
+    return 0;
 }
