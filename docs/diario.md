@@ -2,6 +2,43 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-05
+
+### Avanzamento
+
+- È stato implementato il riconoscimento di `input_path` come file regolare o directory tramite una funzione interna `write_input_path_lines`.
+- Nel caso di file regolare, viene riusata `write_file_lines` e il nome logico passato al mapper è il basename del path.
+- Nel caso di directory, vengono raccolti solo i file regolari contenuti direttamente nella directory, senza scansione ricorsiva.
+- I file della directory vengono ordinati lessicograficamente per `file_name` prima della serializzazione delle righe, come richiesto dal testo.
+- Sono stati aggiunti test I/O per file singolo, directory ordinata, sottodirectory ignorata e tipo di input non supportato.
+
+### Scelte tecniche
+
+- È stata introdotta una struttura interna `mr_input_file_t` con `full_path` e `file_name`, per distinguere il path fisico usato dal framework dal nome logico visibile al mapper.
+- Per la directory è stato scelto un array dinamico con crescita geometrica tramite `realloc`. L'alternativa era fare una prima scansione per contare i file e una seconda per riempire un array allocato una sola volta; per ora si evita la doppia scansione e si mantiene il codice più diretto.
+- Le stringhe salvate nell'array vengono duplicate con `strdup`, perché `full_path` è temporaneo e `entry->d_name` appartiene alla struttura gestita da `readdir`.
+- L'ordinamento usa `qsort` e confronta `file_name`, non `full_path`, perché il testo richiede ordine lessicografico rispetto al nome del file nella directory.
+- Per ora viene usato `stat`: eventuali symlink verso file regolari vengono trattati come file regolari. Se si decidesse di escluderli, andrebbe usato `lstat`.
+
+### Verifiche
+
+- È stato eseguito `git diff --check` con esito positivo.
+- Non è stato eseguito `make` sulla macchina host.
+- I test sono stati eseguiti nel dev container dal programmatore e sono passati.
+
+### Prossimi passi
+
+1. Integrare `write_input_path_lines` nel flusso di `mr_start` quando verrà costruita la pipeline.
+2. Chiarire definitivamente l'ownership di `mr_line_item_t` prima di collegare la coda del mapper.
+
+### Punti da saper spiegare
+
+- Differenza tra path fisico e nome logico del file.
+- Perché `entry->d_name` non basta per aprire i file dentro una directory.
+- Perché la directory va ordinata dopo la raccolta dei file regolari.
+- Perché `mr_input_file_t **files` serve quando si usa `realloc`.
+- Quale overflow viene evitato con `SIZE_MAX / sizeof(**files)`.
+
 ## 2026-06-04
 
 ### Avanzamento
