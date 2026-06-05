@@ -10,3 +10,4 @@
 - Non aggiungere commenti al codice in autonomia. I commenti li aggiungo io, limitati e valutarne la loro utilità.
 - Non provare a compilare o eseguire i comandi `make` dato che tutto viene sviluppato in un dev container e falliscono su questa macchina. Quando c'è la necessità, comunica e io eseguirò i comandi.
 - All'inizio di ogni sessione controlla che siano stati documentati i cambiamenti e le scelte architetturali fatte durante lo sviluppo. Se sei in dubbio sulla presenza, chiedi.
+- Se modifichi grandi porzioni di codice, assicurati di verificarne la comprensione del programmatore (senza forzare o bloccare lo sviluppo).
