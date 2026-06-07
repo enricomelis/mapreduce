@@ -725,3 +725,93 @@ static int write_input_path_lines(int out_fd, const char *input_path) {
     errno = EINVAL;
     return -1;
 }
+
+/* ====================================================================== */
+/* gestione del mapper */
+
+typedef struct {
+    mr_line_queue_t queue;
+    mr_mapper_t mapper;
+    void *user_arg;
+} mr_mapper_context_t;
+
+static int mapper_emit_pair(const char *token, const void *value, size_t value_size, void *emit_arg) {
+    (void)token;
+    (void)value;
+    (void)value_size;
+    (void)emit_arg;
+
+    errno = ENOSYS;
+    return -1;
+}
+
+static int mapper_reader_main(void *arg) {
+    if (arg == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    mr_mapper_context_t *context = arg;
+
+    mr_line_item_t item = { 0 };
+
+    while (1) {
+        item = (mr_line_item_t){ 0 };
+        int queue_status = read_line_record(STDIN_FILENO, &item);
+
+        if (queue_status == -1) {
+            line_queue_close(&context->queue);
+            return -1;
+        }
+
+        if (queue_status == 0) {
+            line_queue_close(&context->queue);
+            return 0;
+        }
+
+        if (queue_status == 1) {
+            if (line_queue_push(&context->queue, &item) == -1) {
+                line_item_destroy(&item);
+                line_queue_close(&context->queue);
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int mapper_worker_main(void *arg) {
+    if (arg == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    mr_mapper_context_t *context = arg;
+
+    while (1) {
+        mr_line_item_t item = { 0 };
+        int queue_status = line_queue_pop(&context->queue, &item);
+
+        if (queue_status == -1) {
+            line_queue_close(&context->queue);
+            return -1;
+        }
+
+        if (queue_status == 0) { return 0; }
+
+        mr_file_line_t line = { .file_name = item.file_name,
+                                .file_name_len = item.file_name_len,
+                                .line = item.line,
+                                .line_len = item.line_len,
+                                .line_number = item.line_number };
+
+        int mapper_status = context->mapper(&line, mapper_emit_pair, context, context->user_arg);
+
+        line_item_destroy(&item);
+
+        if (mapper_status == -1) {
+            line_queue_close(&context->queue);
+            return -1;
+        }
+    }
+
+    return 0;
+}
