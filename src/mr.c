@@ -43,6 +43,11 @@ typedef struct {
 } mr_line_header_t;
 
 typedef struct {
+    int token_len;
+    int value_len;
+} mr_pair_header_t;
+
+typedef struct {
     char *full_path;
     char *file_name;
 } mr_input_file_t;
@@ -729,20 +734,82 @@ static int write_input_path_lines(int out_fd, const char *input_path) {
 /* ====================================================================== */
 /* gestione del mapper */
 
+static int is_valid_token(const char *token) {
+    if (token == NULL || token[0] == '\0') { return 0; }
+
+    for (const char *p = token; *p != '\0'; p++) {
+        int is_digit = *p >= '0' && *p <= '9';
+        int is_upper = *p >= 'A' && *p <= 'Z';
+        int is_lower = *p >= 'a' && *p <= 'z';
+
+        if (!is_digit && !is_upper && !is_lower) { return 0; }
+    }
+
+    return 1;
+}
+
 typedef struct {
     mr_line_queue_t queue;
     mr_mapper_t mapper;
     void *user_arg;
+    int out_fd;
+    mtx_t pipe_emit_lock; /* protezione dei record sulla pipe durante l'emit */
 } mr_mapper_context_t;
 
 static int mapper_emit_pair(const char *token, const void *value, size_t value_size, void *emit_arg) {
-    (void)token;
-    (void)value;
-    (void)value_size;
-    (void)emit_arg;
+    if (emit_arg == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    mr_mapper_context_t *context = emit_arg;
 
-    errno = ENOSYS;
-    return -1;
+    if (!is_valid_token(token) || (value_size > 0 && value == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t token_len = strlen(token);
+    if (token_len > INT_MAX || value_size > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    mr_pair_header_t header = {
+        .token_len = (int)token_len,
+        .value_len = (int)value_size,
+    };
+
+    if (mtx_lock(&context->pipe_emit_lock) != thrd_success) {
+        errno = EIO;
+        return -1;
+    }
+
+    int saved_errno = 0;
+
+    if (writen(context->out_fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) {
+        saved_errno = errno;
+        mtx_unlock(&context->pipe_emit_lock);
+        errno = saved_errno;
+        return -1;
+    }
+
+    if (writen(context->out_fd, token, token_len) != (ssize_t)token_len) {
+        saved_errno = errno;
+        mtx_unlock(&context->pipe_emit_lock);
+        errno = saved_errno;
+        return -1;
+    }
+
+    if (value_size > 0 && writen(context->out_fd, value, value_size) != (ssize_t)value_size) {
+        saved_errno = errno;
+        mtx_unlock(&context->pipe_emit_lock);
+        errno = saved_errno;
+        return -1;
+    }
+
+    mtx_unlock(&context->pipe_emit_lock);
+
+    return 0;
 }
 
 static int mapper_reader_main(void *arg) {
