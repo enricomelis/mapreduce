@@ -47,6 +47,14 @@ typedef struct {
     char *file_name;
 } mr_input_file_t;
 
+static void line_item_destroy(mr_line_item_t *item) {
+    if (item == NULL) { return; }
+
+    free((void *)item->file_name);
+    free((void *)item->line);
+    *item = (mr_line_item_t){ 0 };
+}
+
 /* ====================================================================== */
 /* coda per pattern produttore-consumatore nei thread del processo mapper */
 typedef struct {
@@ -114,8 +122,7 @@ static void line_queue_destroy(mr_line_queue_t *queue) {
     if (queue->items != NULL && queue->capacity > 0) {
         for (size_t i = 0; i < queue->count; i++) {
             size_t index = (queue->head + i) % queue->capacity;
-            free((void *)queue->items[index].file_name);
-            free((void *)queue->items[index].line);
+            line_item_destroy(&queue->items[index]);
         }
     }
 
