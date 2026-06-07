@@ -2,6 +2,46 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-07
+
+### Avanzamento
+
+- Nelle ultime commit è stata aggiunta la prima implementazione interna del processo Mapper:
+  - `mapper_emit_pair` valida i token alfanumerici ASCII e serializza coppie `<token, processed_token>` sulla pipe;
+  - il valore `processed_token` viene trattato come byte opaco con lunghezza esplicita, anche quando contiene byte nulli;
+  - il thread lettore del mapper legge record di riga da `STDIN_FILENO`, li inserisce nella coda condivisa e chiude la coda su EOF;
+  - il worker mapper estrae righe dalla coda, costruisce la vista pubblica `mr_file_line_t`, invoca la callback applicativa e libera il record proprietario consumato.
+- Sono stati aggiunti test in `tests/test_io.c` per:
+  - verificare il formato binario prodotto da `mapper_emit_pair`;
+  - verificare l'accettazione di valori opachi con byte nullo interno;
+  - verificare il rifiuto di token non validi e di `value == NULL` con dimensione positiva;
+  - verificare il percorso `line_queue_push` -> `mapper_worker_main` -> callback mapper -> `mapper_emit_pair`.
+
+### Scelte tecniche
+
+- La scrittura delle coppie del mapper resta protetta da un mutex C11 dedicato, perché in seguito più worker potranno emettere sulla stessa pipe. L'alternativa era lasciare scritture non sincronizzate contando sulla dimensione ridotta dei record, ma non sarebbe una garanzia sufficiente sul formato logico.
+- I test del worker chiamano `mapper_worker_main` direttamente dopo aver preparato una coda già popolata e chiusa. L'alternativa era creare veri thread nel test, ma per ora il comportamento importante è il contratto del worker, non lo scheduler.
+- Il test controlla il record di coppia leggendo header, token e valore dalla pipe, invece di interpretare il payload come stringa. Questo mantiene fermo il requisito del testo: `processed_token` è una sequenza di byte opaca.
+
+### Verifiche
+
+- È stato eseguito `gcc -Iinclude -Wall -Wextra -pedantic -std=c11 tests/test_io.c -o /tmp/mr-test_io` sulla macchina host.
+- La compilazione host non è arrivata ai test perché manca `<threads.h>`, coerentemente con il fatto che il progetto va compilato nel dev container Ubuntu 24.04.
+- Non è stato eseguito `make` sulla macchina host.
+
+### Prossimi passi
+
+1. Eseguire nel dev container la compilazione diretta di `tests/test_io.c` e il binario prodotto.
+2. Se i test passano, collegare il processo mapper al flusso di `mr_start`: pipe, fork, `dup2`, chiusura descrittori e `waitpid`.
+3. Prima di passare al reducer, definire il punto esatto in cui il processo mapper chiude lo standard output dopo la terminazione dei worker.
+
+### Punti da saper spiegare
+
+- Perché il token viene validato come stringa C alfanumerica, mentre il valore resta byte opaco.
+- Perché le emissioni dei worker verso la stessa pipe devono essere sincronizzate.
+- Come passa l'ownership di una riga dalla coda al worker e perché il worker la distrugge dopo la callback.
+- Perché EOF sulla pipe delle righe viene tradotto in chiusura della coda interna del mapper.
+
 ## 2026-06-05
 
 ### Avanzamento

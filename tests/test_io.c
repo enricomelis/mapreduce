@@ -92,6 +92,59 @@ static int join_path(char *out, size_t out_size, const char *directory, const ch
     return 0;
 }
 
+static int expect_pair_record(int fd, const char *token, const void *value, size_t value_size) {
+    mr_pair_header_t header;
+    char token_buffer[64] = {0};
+    unsigned char value_buffer[64] = {0};
+    int failures = 0;
+    size_t token_len = strlen(token);
+
+    if (token_len >= sizeof(token_buffer) || value_size > sizeof(value_buffer)) {
+        errno = EINVAL;
+        return expect_int(0, "expect_pair_record supporta solo payload piccoli");
+    }
+
+    failures += expect_int(readn(fd, &header, sizeof(header)) == (ssize_t)sizeof(header),
+                           "lettura header coppia deve riuscire");
+    failures += expect_int(header.token_len == (int)token_len,
+                           "header coppia deve contenere la lunghezza del token");
+    failures += expect_int(header.value_len == (int)value_size,
+                           "header coppia deve contenere la lunghezza del valore");
+
+    failures += expect_int(readn(fd, token_buffer, token_len) == (ssize_t)token_len,
+                           "lettura token coppia deve riuscire");
+    failures += expect_int(memcmp(token_buffer, token, token_len) == 0,
+                           "token coppia deve essere preservato");
+
+    if (value_size > 0) {
+        failures += expect_int(readn(fd, value_buffer, value_size) == (ssize_t)value_size,
+                               "lettura valore coppia deve riuscire");
+        failures += expect_int(memcmp(value_buffer, value, value_size) == 0,
+                               "valore opaco coppia deve essere preservato");
+    }
+
+    return failures;
+}
+
+static int test_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, void *emit_arg,
+                       void *user_arg) {
+    (void)user_arg;
+
+    if (strcmp(line->file_name, "worker.txt") != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (line->line_number != 3 || line->line_len == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    const unsigned char value[] = {line->line[0], 0, (unsigned char)line->line_len};
+
+    return emit("WorkerToken", value, sizeof(value), emit_arg);
+}
+
 int main(void) {
     int pipefd[2] = {-1, -1};
     char input_path[] = "/tmp/mr-test-XXXXXX";
@@ -108,8 +161,12 @@ int main(void) {
     mr_line_item_t rejected_item = {0};
     mr_line_queue_t queue = {0};
     mr_line_queue_t closed_queue = {0};
+    mr_mapper_context_t mapper_context = {0};
     int input_fd = -1;
     int single_input_fd = -1;
+    int emit_lock_ready = 0;
+    int worker_queue_ready = 0;
+    int worker_lock_ready = 0;
     int failures = 0;
 
     failures += expect_int(pipe(pipefd) == 0, "pipe deve riuscire");
@@ -281,6 +338,92 @@ int main(void) {
                            "read_line_record su record riga troncato deve impostare EPROTO");
     failures += expect_int(close_pair(pipefd) == 0,
                            "close pipe record riga troncato deve riuscire");
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe mapper_emit_pair deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        const unsigned char value[] = {'a', 0, 'b'};
+        emit_lock_ready = mtx_init(&mapper_context.pipe_emit_lock, mtx_plain) == thrd_success;
+        failures += expect_int(emit_lock_ready, "mutex emit mapper deve inizializzarsi");
+        if (emit_lock_ready) {
+            mapper_context.out_fd = pipefd[1];
+
+            failures += expect_int(mapper_emit_pair("Alpha9", value, sizeof(value), &mapper_context) == 0,
+                                   "mapper_emit_pair deve scrivere una coppia valida");
+            failures += expect_pair_record(pipefd[0], "Alpha9", value, sizeof(value));
+
+            failures += expect_int(mapper_emit_pair("Zero", NULL, 0, &mapper_context) == 0,
+                                   "mapper_emit_pair deve accettare valore nullo di dimensione zero");
+            failures += expect_pair_record(pipefd[0], "Zero", NULL, 0);
+
+            errno = 0;
+            failures += expect_int(mapper_emit_pair("bad-token", value, sizeof(value), &mapper_context) == -1,
+                                   "mapper_emit_pair deve rifiutare token non alfanumerici");
+            failures += expect_int(errno == EINVAL,
+                                   "mapper_emit_pair con token invalido deve impostare EINVAL");
+
+            errno = 0;
+            failures += expect_int(mapper_emit_pair("NoValue", NULL, 1, &mapper_context) == -1,
+                                   "mapper_emit_pair deve rifiutare value NULL con dimensione positiva");
+            failures += expect_int(errno == EINVAL,
+                                   "mapper_emit_pair con valore invalido deve impostare EINVAL");
+
+            mtx_destroy(&mapper_context.pipe_emit_lock);
+            emit_lock_ready = 0;
+            mapper_context = (mr_mapper_context_t){0};
+        }
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe mapper_emit_pair deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe mapper_worker_main deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        queued_item.file_name = strdup("worker.txt");
+        queued_item.line = strdup("zeta");
+        queued_item.file_name_len = strlen("worker.txt");
+        queued_item.line_len = strlen("zeta");
+        queued_item.line_number = 3;
+
+        failures += expect_int(queued_item.file_name != NULL && queued_item.line != NULL,
+                               "allocazione item per mapper_worker_main deve riuscire");
+        worker_queue_ready = line_queue_init(&mapper_context.queue, 1) == 0;
+        failures += expect_int(worker_queue_ready, "coda mapper_worker_main deve inizializzarsi");
+        worker_lock_ready = mtx_init(&mapper_context.pipe_emit_lock, mtx_plain) == thrd_success;
+        failures += expect_int(worker_lock_ready, "mutex mapper_worker_main deve inizializzarsi");
+
+        if (queued_item.file_name != NULL && queued_item.line != NULL &&
+            worker_queue_ready && worker_lock_ready) {
+            const unsigned char expected_value[] = {'z', 0, 4};
+
+            mapper_context.mapper = test_mapper;
+            mapper_context.user_arg = NULL;
+            mapper_context.out_fd = pipefd[1];
+
+            failures += expect_int(line_queue_push(&mapper_context.queue, &queued_item) == 0,
+                                   "push item per mapper_worker_main deve riuscire");
+            line_queue_close(&mapper_context.queue);
+            failures += expect_int(mapper_worker_main(&mapper_context) == 0,
+                                   "mapper_worker_main deve consumare la coda chiusa");
+            failures += expect_pair_record(pipefd[0], "WorkerToken", expected_value,
+                                           sizeof(expected_value));
+        }
+
+        free_line_item(&queued_item);
+        if (worker_queue_ready) {
+            line_queue_destroy(&mapper_context.queue);
+            worker_queue_ready = 0;
+        }
+        if (worker_lock_ready) {
+            mtx_destroy(&mapper_context.pipe_emit_lock);
+            worker_lock_ready = 0;
+        }
+        mapper_context = (mr_mapper_context_t){0};
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe mapper_worker_main deve riuscire");
+    }
 
     input_fd = mkstemp(input_path);
     failures += expect_int(input_fd != -1, "mkstemp per write_file_lines deve riuscire");
