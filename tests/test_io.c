@@ -103,6 +103,11 @@ int main(void) {
     char partial[8] = {0};
     mr_line_item_t line_item = {0};
     mr_line_item_t line_out = {0};
+    mr_line_item_t queued_item = {0};
+    mr_line_item_t popped_item = {0};
+    mr_line_item_t rejected_item = {0};
+    mr_line_queue_t queue = {0};
+    mr_line_queue_t closed_queue = {0};
     int input_fd = -1;
     int single_input_fd = -1;
     int failures = 0;
@@ -190,6 +195,63 @@ int main(void) {
                            "riga vuota deve essere ricostruita come stringa vuota");
     free_line_item(&line_out);
     failures += expect_int(close_pair(pipefd) == 0, "close pipe riga vuota deve riuscire");
+
+    failures += expect_int(line_queue_init(&queue, 2) == 0,
+                           "line_queue_init deve riuscire per il test di ownership");
+    if (queue.items != NULL) {
+        queued_item.file_name = strdup("queued.txt");
+        queued_item.line = strdup("linea in coda");
+        queued_item.file_name_len = strlen("queued.txt");
+        queued_item.line_len = strlen("linea in coda");
+        queued_item.line_number = 5;
+
+        failures += expect_int(queued_item.file_name != NULL && queued_item.line != NULL,
+                               "allocazione item proprietario per la coda deve riuscire");
+
+        if (queued_item.file_name != NULL && queued_item.line != NULL) {
+            failures += expect_int(line_queue_push(&queue, &queued_item) == 0,
+                                   "line_queue_push deve accettare un item proprietario");
+            failures += expect_int(queued_item.file_name == NULL && queued_item.line == NULL,
+                                   "line_queue_push riuscita deve azzerare l'item del chiamante");
+            failures += expect_int(line_queue_pop(&queue, &popped_item) == 1,
+                                   "line_queue_pop deve restituire l'item inserito");
+            failures += expect_int(strcmp(popped_item.file_name, "queued.txt") == 0,
+                                   "line_queue_pop deve trasferire il file_name al consumer");
+            failures += expect_int(strcmp(popped_item.line, "linea in coda") == 0,
+                                   "line_queue_pop deve trasferire la riga al consumer");
+            free_line_item(&popped_item);
+        }
+
+        free_line_item(&queued_item);
+        line_queue_destroy(&queue);
+    }
+
+    failures += expect_int(line_queue_init(&closed_queue, 1) == 0,
+                           "line_queue_init deve riuscire per il test di push fallita");
+    if (closed_queue.items != NULL) {
+        rejected_item.file_name = strdup("rejected.txt");
+        rejected_item.line = strdup("riga rifiutata");
+        rejected_item.file_name_len = strlen("rejected.txt");
+        rejected_item.line_len = strlen("riga rifiutata");
+        rejected_item.line_number = 6;
+
+        failures += expect_int(rejected_item.file_name != NULL && rejected_item.line != NULL,
+                               "allocazione item rifiutato deve riuscire");
+
+        if (rejected_item.file_name != NULL && rejected_item.line != NULL) {
+            line_queue_close(&closed_queue);
+            errno = 0;
+            failures += expect_int(line_queue_push(&closed_queue, &rejected_item) == -1,
+                                   "line_queue_push su coda chiusa deve fallire");
+            failures += expect_int(errno == EPIPE,
+                                   "line_queue_push su coda chiusa deve impostare EPIPE");
+            failures += expect_int(rejected_item.file_name != NULL && rejected_item.line != NULL,
+                                   "line_queue_push fallita deve lasciare ownership al chiamante");
+        }
+
+        free_line_item(&rejected_item);
+        line_queue_destroy(&closed_queue);
+    }
 
     pipefd[0] = -1;
     pipefd[1] = -1;

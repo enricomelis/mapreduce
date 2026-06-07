@@ -132,8 +132,8 @@ static void line_queue_destroy(mr_line_queue_t *queue) {
     queue->closed = 1;
 }
 
-static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t item) {
-    if (queue == NULL) {
+static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t *item) {
+    if (queue == NULL || item == NULL) {
         errno = EINVAL;
         return -1;
     }
@@ -153,7 +153,8 @@ static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t item) {
         return -1;
     }
 
-    queue->items[queue->tail] = item;
+    queue->items[queue->tail] = *item;
+    *item = (mr_line_item_t){ 0 };
     queue->tail = (queue->tail + 1) % queue->capacity;
     queue->count++;
 
