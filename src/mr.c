@@ -882,3 +882,76 @@ static int mapper_worker_main(void *arg) {
 
     return 0;
 }
+
+static int mapper_process_main(mr_t mr) {
+    MR_CHECK_NULL(mr);
+
+    mr_mapper_context_t context = { 0 };
+    context.mapper = mr->mapper;
+    context.user_arg = mr->user_arg;
+    context.out_fd = STDOUT_FILENO;
+
+    if (line_queue_init(&context.queue, mr->attr.queue_size) == -1) { return -1; }
+
+    if (mtx_init(&context.pipe_emit_lock, mtx_plain) != thrd_success) {
+        line_queue_destroy(&context.queue);
+        return -1;
+    }
+
+    thrd_t *worker_threads = malloc(mr->attr.mapper_threads * sizeof(*worker_threads));
+    if (worker_threads == NULL) {
+        mtx_destroy(&context.pipe_emit_lock);
+        line_queue_destroy(&context.queue);
+        return -1;
+    }
+
+    size_t workers_created = 0;
+    int result = 0;
+
+    for (size_t i = 0; i < mr->attr.mapper_threads; i++) {
+        if (thrd_create(&worker_threads[i], mapper_worker_main, &context) != thrd_success) {
+            result = -1;
+            line_queue_close(&context.queue);
+            break;
+        }
+        workers_created++;
+    }
+
+    int status;
+    if (result == -1) {
+        for (size_t i = 0; i < workers_created; i++) {
+            if (thrd_join(worker_threads[i], &status) != thrd_success) { result = -1; }
+        }
+
+        free(worker_threads);
+        mtx_destroy(&context.pipe_emit_lock);
+        line_queue_destroy(&context.queue);
+        return -1;
+    }
+
+    thrd_t reader_thread;
+    if (thrd_create(&reader_thread, mapper_reader_main, &context) != thrd_success) {
+        line_queue_close(&context.queue);
+
+        for (size_t i = 0; i < workers_created; i++) {
+            if (thrd_join(worker_threads[i], &status) != thrd_success) { result = -1; }
+        }
+
+        free(worker_threads);
+        mtx_destroy(&context.pipe_emit_lock);
+        line_queue_destroy(&context.queue);
+        return -1;
+    }
+
+    if (thrd_join(reader_thread, &status) != thrd_success || status != 0) { result = -1; }
+
+    for (size_t i = 0; i < workers_created; i++) {
+        if (thrd_join(worker_threads[i], &status) != thrd_success || status != 0) { result = -1; }
+    }
+
+    free(worker_threads);
+    mtx_destroy(&context.pipe_emit_lock);
+    line_queue_destroy(&context.queue);
+
+    return result;
+}
