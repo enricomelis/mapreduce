@@ -2,6 +2,50 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-08
+
+### Avanzamento
+
+- `mr_start` non è più soltanto uno stub: ora crea una prima pipeline parziale con processo mapper.
+- Sono state create due pipe temporanee:
+  - `main_to_mapper`, usata dal processo principale per inviare righe serializzate al mapper;
+  - `mapper_to_main`, temporanea, usata dal padre per drenare le coppie prodotte dal mapper finché il reducer non è implementato.
+- Nel processo figlio mapper vengono usati `dup2()` per collegare:
+  - `main_to_mapper[0]` a `STDIN_FILENO`;
+  - `mapper_to_main[1]` a `STDOUT_FILENO`.
+- Dopo il `dup2`, il figlio chiude i descrittori originali delle pipe, avvia `mapper_process_main` e termina con `_exit`.
+- Il padre chiude i lati di pipe non usati, scrive l'input tramite `write_input_path_lines`, chiude la pipe verso il mapper per generare EOF, drena l'output temporaneo del mapper e attende il figlio con `waitpid`.
+- È stata introdotta `mapper_process_main`, che inizializza il contesto del mapper, crea i worker C11, crea il reader, fa join dei thread e distrugge le risorse.
+- `tests/test_start.c` è stato aggiornato per verificare il comportamento intermedio di `mr_start`.
+
+### Scelte tecniche
+
+- `mapper_process_main` usa `STDIN_FILENO` e `STDOUT_FILENO`, coerentemente con lo schema del testo basato su `dup2`.
+- L'array dei thread worker viene allocato con `malloc`, perché il numero di worker dipende da `mr->attr.mapper_threads` e non serve inizializzazione a zero: i join sono limitati a `workers_created`.
+- I worker vengono creati prima del reader, così se la creazione di un worker fallisce non c'è già un reader potenzialmente bloccato su `read`.
+- In caso di creazione parziale dei worker, la coda viene chiusa per svegliare i worker già creati e permettere il cleanup ordinato.
+- Il figlio termina con `_exit`, non con `exit`, per evitare cleanup della libc e flush di stream ereditati dal padre.
+- Il drain da `mapper_to_main` è esplicitamente temporaneo: sostituisce il futuro collegamento mapper -> reducer e serve a evitare che il mapper resti bloccato scrivendo su una pipe non letta.
+
+### Verifiche
+
+- Il programmatore ha eseguito i test nel dev container Ubuntu 24.04 e ha confermato che passano.
+- Sulla macchina host non è stato eseguito `make`; la compilazione diretta resta non significativa perché manca `<threads.h>`.
+- Il working tree risulta pulito dopo il commit `d51393d`.
+
+### Prossimi passi
+
+1. Rivedere `mr_start` per rendere più robusto e ordinato il cleanup dei descrittori nei percorsi di errore.
+2. Sostituire il drain temporaneo con il vero processo reducer quando verrà implementata la seconda fase della pipeline.
+3. Progettare il reducer: lettura delle coppie, struttura di raggruppamento per token, invocazione della callback reducer e serializzazione dei risultati.
+
+### Punti da saper spiegare
+
+- Perché dopo `dup2` il figlio può chiudere i descrittori originali delle pipe.
+- Perché `_exit` è preferibile a `exit` nel figlio dopo `fork`.
+- Perché il drain temporaneo evita un blocco della pipe, ma non rappresenta ancora la pipeline finale.
+- Come EOF sulla pipe `main_to_mapper` arriva fino alla chiusura della coda interna del mapper.
+
 ## 2026-06-07
 
 ### Avanzamento
