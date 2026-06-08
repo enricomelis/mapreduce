@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <threads.h>
 #include <unistd.h>
 
@@ -51,6 +52,9 @@ typedef struct {
     char *full_path;
     char *file_name;
 } mr_input_file_t;
+
+static int write_input_path_lines(int out_fd, const char *input_path);
+static int mapper_process_main(mr_t mr);
 
 static void line_item_destroy(mr_line_item_t *item) {
     if (item == NULL) { return; }
@@ -333,8 +337,82 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     MR_CHECK_NULL(input_path);
     MR_CHECK_NULL(output_path);
 
-    errno = ENOSYS;
-    return -1;
+    int main_to_mapper[2] = { -1, -1 };
+    int mapper_to_main[2] = { -1, -1 }; /* temporanea: sostituisce la futura pipe mapper -> reducer */
+
+    if (pipe(main_to_mapper) == -1) { return -1; }
+
+    if (pipe(mapper_to_main) == -1) {
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        return -1;
+    }
+
+    pid_t mapper_pid = fork();
+
+    if (mapper_pid == -1) {
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        close(mapper_to_main[0]);
+        close(mapper_to_main[1]);
+
+        return -1;
+    }
+
+    if (mapper_pid == 0) {
+        if (dup2(main_to_mapper[0], STDIN_FILENO) == -1) { _exit(1); }
+        if (dup2(mapper_to_main[1], STDOUT_FILENO) == -1) { _exit(1); }
+
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        close(mapper_to_main[0]);
+        close(mapper_to_main[1]);
+
+        int mapper_status = mapper_process_main(mr);
+        int exit_status = mapper_status == 0 ? 0 : 1;
+
+        _exit(exit_status);
+    }
+
+    int result = 0;
+
+    if (close(main_to_mapper[0]) == -1) { result = -1; }
+    main_to_mapper[0] = -1;
+
+    if (close(mapper_to_main[1]) == -1) { result = -1; }
+    mapper_to_main[1] = -1;
+
+    if (write_input_path_lines(main_to_mapper[1], input_path) == -1) { result = -1; }
+
+    if (close(main_to_mapper[1]) == -1) { result = -1; }
+    main_to_mapper[1] = -1;
+
+    /* Inizio drain temporaneo: finche manca il reducer, il padre svuota l'output del mapper. */
+    char drain_buffer[4096];
+    while (1) {
+        ssize_t n_read = read(mapper_to_main[0], drain_buffer, sizeof(drain_buffer));
+
+        if (n_read > 0) { continue; }
+        if (n_read == 0) { break; }
+        if (errno == EINTR) { continue; }
+
+        result = -1;
+        break;
+    }
+    /* Fine drain temporaneo. */
+
+    if (close(mapper_to_main[0]) == -1) { result = -1; }
+    mapper_to_main[0] = -1;
+
+    int status;
+    if (waitpid(mapper_pid, &status, 0) == -1) { return -1; }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        errno = ECHILD;
+        return -1;
+    }
+
+    return result;
 }
 
 /* ====================================================================== */
