@@ -1163,3 +1163,17 @@ static void pair_groups_destroy(mr_pair_groups_t *groups) {
 
     return;
 }
+
+static mr_pair_group_t *pair_groups_find(mr_pair_groups_t *groups, const char *token, size_t token_len) {
+    if (groups == NULL || token == NULL) { return NULL; }
+
+    for (size_t i = 0; i < groups->count; i++) {
+        if (groups->items[i].token_len == token_len && memcmp(groups->items[i].token, token, token_len) == 0) {
+            return &groups->items[i];
+        }
+    }
+
+    return NULL;
+}
+
+/* static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair); */

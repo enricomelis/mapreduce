@@ -11,6 +11,10 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 - È stata aggiunta `pair_item_destroy`, che libera token e valore e azzera la struttura senza liberare la struttura stessa.
 - È stata implementata `read_pair_record`, simmetrica a `read_line_record`, per leggere il formato prodotto da `mapper_emit_pair`.
 - Sono stati aggiunti test in `tests/test_io.c` per coppie valide, valori opachi con byte nullo, valori vuoti, EOF pulito, header invalidi e record troncati.
+- È proseguita la progettazione delle strutture interne del reducer per il raggruppamento delle coppie lette dalla pipe.
+- Sono state introdotte strutture interne per rappresentare un gruppo associato a un token e l'insieme dinamico dei gruppi.
+- Sono state aggiunte funzioni di distruzione per liberare gruppi, token proprietari e valori opachi posseduti dal framework.
+- È stata aggiunta `pair_groups_find`, che cerca linearmente un gruppo confrontando prima `token_len` e poi i byte del token.
 
 ### Scelte tecniche
 
@@ -18,17 +22,23 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 - Il reducer alloca una nuova copia proprietaria del token e del valore nel proprio spazio di indirizzamento.
 - Il token viene ricostruito come stringa C aggiungendo `'\0'`; il valore resta una sequenza opaca di byte.
 - `read_pair_record` passa ownership al chiamante solo dopo aver letto correttamente tutto il record.
+- I valori di un gruppo sono rappresentati con `mr_value_t`, coerentemente con la firma pubblica della callback reducer.
+- L'array dei gruppi contiene direttamente `mr_pair_group_t`, evitando un livello aggiuntivo di puntatori e allocazioni.
+- La ricerca dei gruppi è lineare per semplicità didattica; una tabella hash resta un'alternativa più efficiente ma non necessaria in questa fase.
+- La distruzione dei valori usa il cast da `const void *` a `void *` perché la memoria è posseduta dal framework, anche se viene esposta al reducer come vista non modificabile.
 
 ### Verifiche
 
 - `git diff --check` eseguito con esito positivo.
+- `git diff --check HEAD` eseguito dopo l'aggiunta delle strutture di raggruppamento con esito positivo.
 - La compilazione diretta sull'host non è significativa perché manca `<threads.h>`; i test vanno eseguiti nel dev container Ubuntu 24.04.
 
 ### Prossimi passi
 
-1. Progettare la struttura dei gruppi del reducer: token proprietario e array dinamico di valori.
-2. Implementare una funzione per aggiungere una coppia letta al gruppo corretto.
-3. Aggiungere test mirati sul raggruppamento prima di integrare il processo reducer in `mr_start`.
+1. Implementare `pair_groups_push_group`.
+2. Implementare l'aggiunta di un valore a un gruppo.
+3. Implementare `pair_groups_add_pair` trasferendo correttamente ownership da `mr_pair_item_t` ai gruppi.
+4. Aggiungere test mirati sul raggruppamento prima di integrare il processo reducer in `mr_start`.
 
 ### Punti da saper spiegare
 
@@ -36,6 +46,9 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 - Quando `read_pair_record` trasferisce ownership al chiamante.
 - Perché il reducer può chiamare la callback solo dopo EOF.
 - Perché il valore opaco non va mai trattato come stringa C.
+- Perché un gruppo contiene un array di `mr_value_t` e non un array di `void *`.
+- Perché `pair_groups_find` confronta prima la lunghezza e poi i byte del token.
+- Quando l'ownership di token e value passa dalla coppia letta al gruppo.
 
 ## 2026-06-08
 
