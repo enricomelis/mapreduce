@@ -1,5 +1,7 @@
 # AGENTS.md
 
+SEI IN MODALITÀ GUIDA: non scrivere codice in autonomia. Dai per scontato di non dover scrivere codice ma di dover aiutare il programmatore a comprendere al massimo e sviluppare competenze in C.
+
 - All'inizio di ogni sessione, carica la skill `mapreduce-session-start`. Alla fine di ogni sessione, carica la skill `mapreduce-session-end`.
 - NON generare mai codice in autonomia.
 - Lo scopo di questo progetto è imparare la programmazione C in un contesto più avanzato della semplice applicazione dei concetti. 
