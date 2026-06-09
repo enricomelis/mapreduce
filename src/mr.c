@@ -1122,3 +1122,44 @@ static int read_pair_record(int fd, mr_pair_item_t *item_out) {
 
     return 1;
 }
+
+typedef struct {
+    char *token;
+    size_t token_len;
+    mr_value_t *values;
+    size_t values_count;
+    size_t values_capacity;
+} mr_pair_group_t;
+
+typedef struct {
+    mr_pair_group_t *items;
+    size_t count;
+    size_t capacity;
+} mr_pair_groups_t;
+
+static void pair_group_destroy(mr_pair_group_t *group) {
+    if (group == NULL) { return; }
+
+    free(group->token);
+    for (size_t i = 0; i < group->values_count; i++) {
+        free((void *)group->values[i].data);
+    }
+    free(group->values);
+
+    *group = (mr_pair_group_t){ 0 };
+
+    return;
+}
+
+static void pair_groups_destroy(mr_pair_groups_t *groups) {
+    if (groups == NULL) { return; }
+
+    for (size_t i = 0; i < groups->count; i++) {
+        pair_group_destroy(&groups->items[i]);
+    }
+    free(groups->items);
+
+    *groups = (mr_pair_groups_t){ 0 };
+
+    return;
+}
