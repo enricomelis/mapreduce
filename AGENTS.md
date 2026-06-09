@@ -11,3 +11,4 @@ SEI IN MODALITÀ GUIDA: non scrivere codice in autonomia. Dai per scontato di no
 - Non aggiungere commenti al codice in autonomia. I commenti li aggiungo io, limitati e valutarne la loro utilità.
 - Se modifichi grandi porzioni di codice, assicurati di verificarne la comprensione del programmatore (senza forzare o bloccare lo sviluppo).
 - Il progetto viene sviluppato all'interno di un dev container che simula una macchina con Ubuntu 24.04, cioè il sistema in cui verrà eseguito il codice prodotto alla fine.
+- Le best practices dello sviluppo UNIX sono favorite, soprattutto la modularità delle funzioni.
