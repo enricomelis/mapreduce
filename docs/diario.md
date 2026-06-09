@@ -2,6 +2,41 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-09
+
+### Avanzamento
+
+- È iniziata la progettazione del processo reducer partendo dalla lettura delle coppie intermedie.
+- È stata introdotta `mr_pair_item_t`, una struttura interna proprietaria per rappresentare una coppia `<token, value>` letta dalla pipe mapper -> reducer.
+- È stata aggiunta `pair_item_destroy`, che libera token e valore e azzera la struttura senza liberare la struttura stessa.
+- È stata implementata `read_pair_record`, simmetrica a `read_line_record`, per leggere il formato prodotto da `mapper_emit_pair`.
+- Sono stati aggiunti test in `tests/test_io.c` per coppie valide, valori opachi con byte nullo, valori vuoti, EOF pulito, header invalidi e record troncati.
+
+### Scelte tecniche
+
+- La memoria del mapper non viene trasferita al reducer: sulla pipe passano solo byte serializzati.
+- Il reducer alloca una nuova copia proprietaria del token e del valore nel proprio spazio di indirizzamento.
+- Il token viene ricostruito come stringa C aggiungendo `'\0'`; il valore resta una sequenza opaca di byte.
+- `read_pair_record` passa ownership al chiamante solo dopo aver letto correttamente tutto il record.
+
+### Verifiche
+
+- `git diff --check` eseguito con esito positivo.
+- La compilazione diretta sull'host non è significativa perché manca `<threads.h>`; i test vanno eseguiti nel dev container Ubuntu 24.04.
+
+### Prossimi passi
+
+1. Progettare la struttura dei gruppi del reducer: token proprietario e array dinamico di valori.
+2. Implementare una funzione per aggiungere una coppia letta al gruppo corretto.
+3. Aggiungere test mirati sul raggruppamento prima di integrare il processo reducer in `mr_start`.
+
+### Punti da saper spiegare
+
+- Perché i puntatori del mapper non possono essere inviati sulla pipe.
+- Quando `read_pair_record` trasferisce ownership al chiamante.
+- Perché il reducer può chiamare la callback solo dopo EOF.
+- Perché il valore opaco non va mai trattato come stringa C.
+
 ## 2026-06-08
 
 ### Avanzamento

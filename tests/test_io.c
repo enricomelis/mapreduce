@@ -126,6 +126,36 @@ static int expect_pair_record(int fd, const char *token, const void *value, size
     return failures;
 }
 
+static int expect_pair_item(const mr_pair_item_t *item, const char *token, const void *value,
+                            size_t value_size) {
+    int failures = 0;
+    size_t token_len = strlen(token);
+
+    failures += expect_int(item != NULL, "item coppia letto non deve essere NULL");
+    if (item == NULL) { return failures; }
+
+    failures += expect_int(item->token_len == token_len,
+                           "read_pair_record deve preservare la lunghezza del token");
+    failures += expect_int(strcmp(item->token, token) == 0,
+                           "read_pair_record deve ricostruire il token come stringa C");
+    failures += expect_int(item->value_len == value_size,
+                           "read_pair_record deve preservare la lunghezza del valore");
+
+    if (value_size == 0) {
+        failures += expect_int(item->value == NULL,
+                               "read_pair_record deve lasciare NULL il valore di dimensione zero");
+    } else {
+        failures += expect_int(item->value != NULL,
+                               "read_pair_record deve allocare il valore non vuoto");
+        if (item->value != NULL) {
+            failures += expect_int(memcmp(item->value, value, value_size) == 0,
+                                   "read_pair_record deve preservare i byte opachi del valore");
+        }
+    }
+
+    return failures;
+}
+
 static int test_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, void *emit_arg,
                        void *user_arg) {
     (void)user_arg;
@@ -159,6 +189,7 @@ int main(void) {
     mr_line_item_t queued_item = {0};
     mr_line_item_t popped_item = {0};
     mr_line_item_t rejected_item = {0};
+    mr_pair_item_t pair_item = {0};
     mr_line_queue_t queue = {0};
     mr_line_queue_t closed_queue = {0};
     mr_mapper_context_t mapper_context = {0};
@@ -375,6 +406,98 @@ int main(void) {
         }
         failures += expect_int(close_pair(pipefd) == 0,
                                "close pipe mapper_emit_pair deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe read_pair_record deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        const unsigned char value[] = {'r', 0, 'd'};
+        emit_lock_ready = mtx_init(&mapper_context.pipe_emit_lock, mtx_plain) == thrd_success;
+        failures += expect_int(emit_lock_ready,
+                               "mutex emit mapper per read_pair_record deve inizializzarsi");
+        if (emit_lock_ready) {
+            mapper_context.out_fd = pipefd[1];
+
+            failures += expect_int(mapper_emit_pair("ReadToken", value, sizeof(value),
+                                                    &mapper_context) == 0,
+                                   "mapper_emit_pair deve produrre input per read_pair_record");
+            failures += expect_int(read_pair_record(pipefd[0], &pair_item) == 1,
+                                   "read_pair_record deve leggere una coppia valida");
+            failures += expect_pair_item(&pair_item, "ReadToken", value, sizeof(value));
+            pair_item_destroy(&pair_item);
+
+            failures += expect_int(mapper_emit_pair("EmptyValue", NULL, 0, &mapper_context) == 0,
+                                   "mapper_emit_pair deve produrre un valore vuoto");
+            failures += expect_int(read_pair_record(pipefd[0], &pair_item) == 1,
+                                   "read_pair_record deve leggere un valore vuoto");
+            failures += expect_pair_item(&pair_item, "EmptyValue", NULL, 0);
+            pair_item_destroy(&pair_item);
+
+            mtx_destroy(&mapper_context.pipe_emit_lock);
+            emit_lock_ready = 0;
+            mapper_context = (mr_mapper_context_t){0};
+        }
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe read_pair_record deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe EOF read_pair_record deve riuscire");
+    failures += expect_int(close(pipefd[1]) == 0,
+                           "chiusura lato scrittura EOF read_pair_record deve riuscire");
+    pipefd[1] = -1;
+    failures += expect_int(read_pair_record(pipefd[0], &pair_item) == 0,
+                           "read_pair_record deve restituire 0 su EOF pulito");
+    failures += expect_int(close_pair(pipefd) == 0,
+                           "close pipe EOF read_pair_record deve riuscire");
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0,
+                           "pipe header invalido read_pair_record deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        mr_pair_header_t invalid_header = {0, 1};
+
+        failures += expect_int(writen(pipefd[1], &invalid_header, sizeof(invalid_header)) ==
+                                   (ssize_t)sizeof(invalid_header),
+                               "scrittura header coppia invalido deve riuscire");
+        failures += expect_int(close(pipefd[1]) == 0,
+                               "chiusura lato scrittura header invalido deve riuscire");
+        pipefd[1] = -1;
+        errno = 0;
+        failures += expect_int(read_pair_record(pipefd[0], &pair_item) == -1,
+                               "read_pair_record deve rifiutare header con token vuoto");
+        failures += expect_int(errno == EPROTO,
+                               "read_pair_record su header invalido deve impostare EPROTO");
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe header invalido read_pair_record deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0,
+                           "pipe record troncato read_pair_record deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        mr_pair_header_t truncated_header = {5, 3};
+
+        failures += expect_int(writen(pipefd[1], &truncated_header, sizeof(truncated_header)) ==
+                                   (ssize_t)sizeof(truncated_header),
+                               "scrittura header coppia troncata deve riuscire");
+        failures += expect_int(writen(pipefd[1], "abc", 3) == 3,
+                               "scrittura payload parziale coppia deve riuscire");
+        failures += expect_int(close(pipefd[1]) == 0,
+                               "chiusura lato scrittura coppia troncata deve riuscire");
+        pipefd[1] = -1;
+        errno = 0;
+        failures += expect_int(read_pair_record(pipefd[0], &pair_item) == -1,
+                               "read_pair_record deve fallire su coppia troncata");
+        failures += expect_int(errno == EPROTO,
+                               "read_pair_record su coppia troncata deve impostare EPROTO");
+        pair_item_destroy(&pair_item);
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe record troncato read_pair_record deve riuscire");
     }
 
     pipefd[0] = -1;

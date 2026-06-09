@@ -62,6 +62,8 @@ static void line_item_destroy(mr_line_item_t *item) {
     free((void *)item->file_name);
     free((void *)item->line);
     *item = (mr_line_item_t){ 0 };
+
+    return;
 }
 
 /* ====================================================================== */
@@ -1032,4 +1034,91 @@ static int mapper_process_main(mr_t mr) {
     line_queue_destroy(&context.queue);
 
     return result;
+}
+
+/* ====================================================================== */
+/* gestione del reducer */
+
+typedef struct {
+    char *token;
+    size_t token_len;
+    void *value;
+    size_t value_len;
+} mr_pair_item_t;
+
+static void pair_item_destroy(mr_pair_item_t *item) {
+    if (item == NULL) { return; }
+
+    free(item->token);
+    free(item->value);
+
+    *item = (mr_pair_item_t){ 0 };
+
+    return;
+}
+
+/* valori di return
+ * `-1`: errore
+ * `0`: EOF pulito
+ * `1`: coppia letta
+ */
+static int read_pair_record(int fd, mr_pair_item_t *item_out) {
+    MR_CHECK_NULL(item_out);
+    *item_out = (mr_pair_item_t){ 0 };
+
+    mr_pair_header_t header;
+
+    ssize_t n_read = readn(fd, &header, sizeof(header));
+
+    if (n_read == 0) { return 0; }
+    if (n_read == -1) { return -1; }
+
+    if (header.token_len <= 0 || header.value_len < 0) {
+        errno = EPROTO;
+        return -1;
+    }
+
+    size_t token_len = (size_t)header.token_len;
+    size_t value_len = (size_t)header.value_len;
+
+    char *token = malloc(token_len + 1);
+    if (token == NULL) { return -1; }
+
+    void *value = NULL;
+    if (value_len > 0) {
+        value = malloc(value_len);
+        if (value == NULL) {
+            int saved_errno = errno;
+            free(token);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+
+    n_read = readn(fd, token, token_len);
+    if (n_read != (ssize_t)token_len) {
+        free(token);
+        free(value);
+        if (n_read == 0) { errno = EPROTO; }
+        return -1;
+    }
+
+    token[token_len] = '\0';
+
+    if (value_len > 0) {
+        n_read = readn(fd, value, value_len);
+        if (n_read != (ssize_t)value_len) {
+            free(token);
+            free(value);
+            if (n_read == 0) { errno = EPROTO; }
+            return -1;
+        }
+    }
+
+    item_out->token = token;
+    item_out->token_len = token_len;
+    item_out->value = value;
+    item_out->value_len = value_len;
+
+    return 1;
 }
