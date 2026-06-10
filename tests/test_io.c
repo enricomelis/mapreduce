@@ -612,6 +612,77 @@ int main(void) {
 
     pipefd[0] = -1;
     pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe collect_pair_groups deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        const unsigned char alpha_first[] = {'x', 0, '1'};
+        const unsigned char alpha_second[] = {'y', 0, '2'};
+        mr_pair_groups_t collected_groups = {0};
+        mr_pair_group_t *group = NULL;
+
+        emit_lock_ready = mtx_init(&mapper_context.pipe_emit_lock, mtx_plain) == thrd_success;
+        failures += expect_int(emit_lock_ready,
+                               "mutex emit mapper per collect_pair_groups deve inizializzarsi");
+        if (emit_lock_ready) {
+            mapper_context.out_fd = pipefd[1];
+
+            failures += expect_int(mapper_emit_pair("Alpha", alpha_first, sizeof(alpha_first),
+                                                    &mapper_context) == 0,
+                                   "mapper_emit_pair deve produrre il primo valore Alpha");
+            failures += expect_int(mapper_emit_pair("Beta", NULL, 0, &mapper_context) == 0,
+                                   "mapper_emit_pair deve produrre un valore vuoto Beta");
+            failures += expect_int(mapper_emit_pair("Alpha", alpha_second, sizeof(alpha_second),
+                                                    &mapper_context) == 0,
+                                   "mapper_emit_pair deve produrre il secondo valore Alpha");
+            failures += expect_int(close(pipefd[1]) == 0,
+                                   "chiusura lato scrittura collect_pair_groups deve riuscire");
+            pipefd[1] = -1;
+
+            failures += expect_int(collect_pair_groups(pipefd[0], &collected_groups) == 0,
+                                   "collect_pair_groups deve leggere fino a EOF pulito");
+            failures += expect_int(collected_groups.count == 2,
+                                   "collect_pair_groups deve creare due gruppi distinti");
+
+            group = pair_groups_find(&collected_groups, "Alpha", strlen("Alpha"));
+            failures += expect_int(group != NULL,
+                                   "collect_pair_groups deve raccogliere il gruppo Alpha");
+            if (group != NULL) {
+                failures += expect_int(group->values_count == 2,
+                                       "gruppo Alpha raccolto deve contenere due valori");
+                failures += expect_int(group->values[0].size == sizeof(alpha_first),
+                                       "primo valore Alpha raccolto deve preservare la dimensione");
+                failures += expect_int(memcmp(group->values[0].data, alpha_first,
+                                              sizeof(alpha_first)) == 0,
+                                       "primo valore Alpha raccolto deve preservare i byte");
+                failures += expect_int(group->values[1].size == sizeof(alpha_second),
+                                       "secondo valore Alpha raccolto deve preservare la dimensione");
+                failures += expect_int(memcmp(group->values[1].data, alpha_second,
+                                              sizeof(alpha_second)) == 0,
+                                       "secondo valore Alpha raccolto deve preservare i byte");
+            }
+
+            group = pair_groups_find(&collected_groups, "Beta", strlen("Beta"));
+            failures += expect_int(group != NULL,
+                                   "collect_pair_groups deve raccogliere il gruppo Beta");
+            if (group != NULL) {
+                failures += expect_int(group->values_count == 1,
+                                       "gruppo Beta raccolto deve contenere un valore");
+                failures += expect_int(group->values[0].data == NULL,
+                                       "valore vuoto Beta raccolto deve mantenere data NULL");
+                failures += expect_int(group->values[0].size == 0,
+                                       "valore vuoto Beta raccolto deve mantenere size zero");
+            }
+
+            pair_groups_destroy(&collected_groups);
+            mtx_destroy(&mapper_context.pipe_emit_lock);
+            emit_lock_ready = 0;
+            mapper_context = (mr_mapper_context_t){0};
+        }
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe collect_pair_groups deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
     failures += expect_int(pipe(pipefd) == 0, "pipe mapper_worker_main deve riuscire");
     if (pipefd[0] != -1 && pipefd[1] != -1) {
         queued_item.file_name = strdup("worker.txt");
