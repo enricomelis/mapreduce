@@ -1137,6 +1137,8 @@ typedef struct {
     size_t capacity;
 } mr_pair_groups_t;
 
+/* distruttori per singolo gruppo e array di gruppi */
+
 static void pair_group_destroy(mr_pair_group_t *group) {
     if (group == NULL) { return; }
 
@@ -1163,6 +1165,13 @@ static void pair_groups_destroy(mr_pair_groups_t *groups) {
 
     return;
 }
+
+/* funzioni per l'aggiunta dei valori
+ * find: trova il gruppo corretto dato un token
+ * push_group: crea un gruppo nel caso non esista per il token, aggiungendolo
+ * add_value: dato un gruppo, fa la push del valore dentro group.values
+ * add_pair: orchestratore per tutto il flusso | dalla coppia fino al gruppo
+ */
 
 static mr_pair_group_t *pair_groups_find(mr_pair_groups_t *groups, const char *token, size_t token_len) {
     if (groups == NULL || token == NULL) { return NULL; }
