@@ -1176,4 +1176,69 @@ static mr_pair_group_t *pair_groups_find(mr_pair_groups_t *groups, const char *t
     return NULL;
 }
 
+static mr_pair_group_t *pair_groups_push_group(mr_pair_groups_t *groups, mr_pair_item_t *item) {
+    if (groups == NULL || item == NULL || item->token == NULL || item->token_len == 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (groups->count == groups->capacity) {
+        size_t new_capacity = groups->capacity == 0 ? 8 : groups->capacity * 2;
+
+        if (new_capacity < groups->capacity || new_capacity > SIZE_MAX / sizeof(*groups->items)) {
+            errno = ENOMEM;
+            return NULL;
+        }
+
+        mr_pair_group_t *new_items = realloc(groups->items, new_capacity * sizeof(*new_items));
+        if (new_items == NULL) { return NULL; }
+
+        groups->items = new_items;
+        groups->capacity = new_capacity;
+    }
+
+    mr_pair_group_t *group = &groups->items[groups->count];
+    *group = (mr_pair_group_t){ 0 };
+    group->token = item->token;
+    group->token_len = item->token_len;
+    groups->count++;
+
+    item->token = NULL;
+    item->token_len = 0;
+
+    return group;
+}
+
+static int pair_group_add_value(mr_pair_group_t *group, mr_pair_item_t *item) {
+    if (group == NULL || item == NULL || (item->value_len > 0 && item->value == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (group->values_count == group->values_capacity) {
+        size_t new_capacity = group->values_capacity == 0 ? 8 : group->values_capacity * 2;
+
+        if (new_capacity < group->values_capacity || new_capacity > SIZE_MAX / sizeof(*group->values)) {
+            errno = ENOMEM;
+            return -1;
+        }
+
+        mr_value_t *new_values = realloc(group->values, new_capacity * sizeof(*new_values));
+        if (new_values == NULL) { return -1; }
+
+        group->values = new_values;
+        group->values_capacity = new_capacity;
+    }
+
+    mr_value_t *value = &group->values[group->values_count];
+    value->data = item->value;
+    value->size = item->value_len;
+    group->values_count++;
+
+    item->value = NULL;
+    item->value_len = 0;
+
+    return 0;
+}
+
 /* static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair); */
