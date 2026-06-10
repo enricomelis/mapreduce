@@ -1241,4 +1241,37 @@ static int pair_group_add_value(mr_pair_group_t *group, mr_pair_item_t *item) {
     return 0;
 }
 
-/* static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair); */
+static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair) {
+    if (groups == NULL || pair == NULL || pair->token == NULL || pair->token_len == 0 ||
+        (pair->value_len > 0 && pair->value == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int created_group = 0;
+    mr_pair_group_t *group = pair_groups_find(groups, pair->token, pair->token_len);
+
+    if (group == NULL) {
+        group = pair_groups_push_group(groups, pair);
+        if (group == NULL) { return -1; }
+        created_group = 1;
+    }
+
+    if (pair_group_add_value(group, pair) == -1) {
+        if (created_group != 0) {
+            pair->token = group->token;
+            pair->token_len = group->token_len;
+            *group = (mr_pair_group_t){ 0 };
+            groups->count--;
+        }
+        return -1;
+    }
+
+    if (created_group == 0) {
+        free(pair->token);
+        pair->token = NULL;
+        pair->token_len = 0;
+    }
+
+    return 0;
+}
