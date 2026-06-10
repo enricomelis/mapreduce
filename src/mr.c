@@ -391,7 +391,7 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
 
     /* Inizio drain temporaneo: finche manca il reducer, il padre svuota l'output del mapper. */
     char drain_buffer[4096];
-    while (1) {
+    for (;;) {
         ssize_t n_read = read(mapper_to_main[0], drain_buffer, sizeof(drain_buffer));
 
         if (n_read > 0) { continue; }
@@ -901,7 +901,7 @@ static int mapper_reader_main(void *arg) {
 
     mr_line_item_t item = { 0 };
 
-    while (1) {
+    for (;;) {
         item = (mr_line_item_t){ 0 };
         int queue_status = read_line_record(STDIN_FILENO, &item);
 
@@ -933,7 +933,7 @@ static int mapper_worker_main(void *arg) {
     }
     mr_mapper_context_t *context = arg;
 
-    while (1) {
+    for (;;) {
         mr_line_item_t item = { 0 };
         int queue_status = line_queue_pop(&context->queue, &item);
 
@@ -1283,4 +1283,29 @@ static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair) 
     }
 
     return 0;
+}
+
+static int collect_pair_groups(int fd, mr_pair_groups_t *groups) {
+    if (groups == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for (;;) {
+        mr_pair_item_t pair = { 0 };
+        int status = read_pair_record(fd, &pair);
+
+        if (status == 0) { return 0; }
+        if (status == -1) {
+            pair_item_destroy(&pair);
+            return -1;
+        }
+
+        if (pair_groups_add_pair(groups, &pair) == -1) {
+            pair_item_destroy(&pair);
+            return -1;
+        }
+
+        pair_item_destroy(&pair);
+    }
 }
