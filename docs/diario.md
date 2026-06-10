@@ -2,6 +2,47 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-10
+
+### Avanzamento
+
+- È stata completata la prima struttura di raggruppamento interna del reducer.
+- È stata implementata `pair_groups_push_group`, che crea un nuovo gruppo per un token non ancora visto trasferendo l'ownership del token dalla coppia letta al gruppo.
+- È stata implementata `pair_group_add_value`, che aggiunge un valore opaco a un gruppo trasferendo l'ownership del valore dalla coppia al gruppo.
+- È stata implementata `pair_groups_add_pair`, che orchestra ricerca del gruppo, creazione se necessaria, aggiunta del valore e gestione dell'ownership della coppia.
+- È stata implementata `collect_pair_groups`, che legge coppie dalla pipe fino a EOF tramite `read_pair_record` e le inserisce nei gruppi tramite `pair_groups_add_pair`.
+- Sono stati aggiunti test per token nuovo, token già esistente, token diverso, valore vuoto e raccolta completa da pipe usando `mapper_emit_pair`.
+- I cicli infiniti espliciti sono stati uniformati allo stile C `for (;;)`, al posto di `while (1)`.
+
+### Scelte tecniche
+
+- `mr_pair_groups_t` viene inizializzato a zero dal chiamante, senza una funzione `init` dedicata, perché `items == NULL`, `count == 0` e `capacity == 0` sono uno stato valido.
+- `pair_groups_push_group` restituisce un puntatore al gruppo appena creato, così `pair_groups_add_pair` può aggiungere subito il valore senza una seconda ricerca.
+- Su successo, `pair_groups_add_pair` consuma completamente la coppia; su fallimento, lascia token e valore al chiamante, così il cleanup resta chiaro.
+- Se l'aggiunta del valore fallisce dopo la creazione di un gruppo nuovo, `pair_groups_add_pair` fa rollback del token e decrementa il numero di gruppi.
+- `collect_pair_groups` non distrugge `groups` su errore: la responsabilità resta al chiamante, coerentemente con il resto del codice.
+
+### Verifiche
+
+- I test sono stati eseguiti nel dev container Ubuntu 24.04 e risultano passanti.
+- Le modifiche sono state committate.
+- La compilazione diretta sull'host resta non significativa perché manca `<threads.h>`.
+
+### Prossimi passi
+
+1. Progettare il formato interno dei risultati finali prodotti dal reducer.
+2. Implementare `reducer_emit_result`, simmetrica a `mapper_emit_pair`, trattando il risultato come byte opaco.
+3. Aggiungere test per risultati con byte nulli, risultati vuoti e record troncati.
+4. Implementare un primo `reducer_process_main` che raccolga i gruppi, invochi la callback reducer e scriva i risultati su `STDOUT_FILENO`.
+
+### Punti da saper spiegare
+
+- Perché `collect_pair_groups` considera EOF un successo.
+- Perché il reducer può chiamare la callback solo dopo EOF.
+- Differenza tra `⟨token, processed_token[]⟩` passato alla callback reducer e record di output finale.
+- Perché il risultato finale deve essere trattato come byte opaco.
+- Come viene gestita l'ownership di token e value nei casi di successo e fallimento di `pair_groups_add_pair`.
+
 ## 2026-06-09
 
 ### Avanzamento
