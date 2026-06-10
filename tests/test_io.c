@@ -156,6 +156,35 @@ static int expect_pair_item(const mr_pair_item_t *item, const char *token, const
     return failures;
 }
 
+static int make_pair_item(mr_pair_item_t *item, const char *token, const void *value,
+                          size_t value_size) {
+    if (item == NULL || token == NULL || (value_size > 0 && value == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *item = (mr_pair_item_t){0};
+
+    item->token = strdup(token);
+    if (item->token == NULL) { return -1; }
+
+    item->token_len = strlen(token);
+
+    if (value_size > 0) {
+        item->value = malloc(value_size);
+        if (item->value == NULL) {
+            pair_item_destroy(item);
+            return -1;
+        }
+
+        memcpy(item->value, value, value_size);
+    }
+
+    item->value_len = value_size;
+
+    return 0;
+}
+
 static int test_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, void *emit_arg,
                        void *user_arg) {
     (void)user_arg;
@@ -498,6 +527,87 @@ int main(void) {
         pair_item_destroy(&pair_item);
         failures += expect_int(close_pair(pipefd) == 0,
                                "close pipe record troncato read_pair_record deve riuscire");
+    }
+
+    mr_pair_groups_t groups = {0};
+    {
+        const unsigned char alpha_first[] = {'1', 0, 'a'};
+        const unsigned char alpha_second[] = {'2', 0, 'b'};
+        mr_pair_group_t *group = NULL;
+
+        failures += expect_int(make_pair_item(&pair_item, "Alpha", alpha_first,
+                                              sizeof(alpha_first)) == 0,
+                               "creazione pair Alpha iniziale deve riuscire");
+        if (pair_item.token != NULL && pair_item.value != NULL) {
+            failures += expect_int(pair_groups_add_pair(&groups, &pair_item) == 0,
+                                   "pair_groups_add_pair deve creare un gruppo per un token nuovo");
+            failures += expect_int(pair_item.token == NULL && pair_item.value == NULL,
+                                   "pair_groups_add_pair deve consumare la pair su token nuovo");
+            failures += expect_int(groups.count == 1,
+                                   "pair_groups_add_pair deve aggiungere un solo gruppo nuovo");
+            group = pair_groups_find(&groups, "Alpha", strlen("Alpha"));
+            failures += expect_int(group != NULL,
+                                   "pair_groups_find deve trovare il gruppo appena creato");
+            if (group != NULL) {
+                failures += expect_int(group->values_count == 1,
+                                       "gruppo nuovo deve contenere un valore");
+                failures += expect_int(group->values[0].size == sizeof(alpha_first),
+                                       "primo valore del gruppo deve preservare la dimensione");
+                failures += expect_int(memcmp(group->values[0].data, alpha_first,
+                                              sizeof(alpha_first)) == 0,
+                                       "primo valore del gruppo deve preservare i byte opachi");
+            }
+        }
+        pair_item_destroy(&pair_item);
+
+        failures += expect_int(make_pair_item(&pair_item, "Alpha", alpha_second,
+                                              sizeof(alpha_second)) == 0,
+                               "creazione seconda pair Alpha deve riuscire");
+        if (pair_item.token != NULL && pair_item.value != NULL) {
+            failures += expect_int(pair_groups_add_pair(&groups, &pair_item) == 0,
+                                   "pair_groups_add_pair deve aggiungere un valore a un gruppo esistente");
+            failures += expect_int(pair_item.token == NULL && pair_item.value == NULL,
+                                   "pair_groups_add_pair deve consumare la pair su token esistente");
+            failures += expect_int(groups.count == 1,
+                                   "token esistente non deve creare un secondo gruppo");
+            group = pair_groups_find(&groups, "Alpha", strlen("Alpha"));
+            failures += expect_int(group != NULL,
+                                   "pair_groups_find deve ritrovare il gruppo esistente");
+            if (group != NULL) {
+                failures += expect_int(group->values_count == 2,
+                                       "gruppo esistente deve contenere due valori");
+                failures += expect_int(group->values[1].size == sizeof(alpha_second),
+                                       "secondo valore del gruppo deve preservare la dimensione");
+                failures += expect_int(memcmp(group->values[1].data, alpha_second,
+                                              sizeof(alpha_second)) == 0,
+                                       "secondo valore del gruppo deve preservare i byte opachi");
+            }
+        }
+        pair_item_destroy(&pair_item);
+
+        failures += expect_int(make_pair_item(&pair_item, "Beta", NULL, 0) == 0,
+                               "creazione pair Beta con valore vuoto deve riuscire");
+        if (pair_item.token != NULL) {
+            failures += expect_int(pair_groups_add_pair(&groups, &pair_item) == 0,
+                                   "pair_groups_add_pair deve accettare un valore vuoto");
+            failures += expect_int(pair_item.token == NULL && pair_item.value == NULL,
+                                   "pair_groups_add_pair deve consumare la pair con valore vuoto");
+            failures += expect_int(groups.count == 2,
+                                   "token diverso deve creare un secondo gruppo");
+            group = pair_groups_find(&groups, "Beta", strlen("Beta"));
+            failures += expect_int(group != NULL,
+                                   "pair_groups_find deve trovare il gruppo con valore vuoto");
+            if (group != NULL) {
+                failures += expect_int(group->values_count == 1,
+                                       "gruppo Beta deve contenere un valore");
+                failures += expect_int(group->values[0].data == NULL,
+                                       "valore vuoto deve mantenere data NULL");
+                failures += expect_int(group->values[0].size == 0,
+                                       "valore vuoto deve mantenere size zero");
+            }
+        }
+        pair_item_destroy(&pair_item);
+        pair_groups_destroy(&groups);
     }
 
     pipefd[0] = -1;
