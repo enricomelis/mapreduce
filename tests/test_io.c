@@ -126,6 +126,40 @@ static int expect_pair_record(int fd, const char *token, const void *value, size
     return failures;
 }
 
+static int expect_result_record(int fd, const char *token, const void *result, size_t result_size) {
+    mr_result_header_t header;
+    char token_buffer[64] = {0};
+    unsigned char result_buffer[64] = {0};
+    int failures = 0;
+    size_t token_len = strlen(token);
+
+    if (token_len >= sizeof(token_buffer) || result_size > sizeof(result_buffer)) {
+        errno = EINVAL;
+        return expect_int(0, "expect_result_record supporta solo payload piccoli");
+    }
+
+    failures += expect_int(readn(fd, &header, sizeof(header)) == (ssize_t)sizeof(header),
+                           "lettura header risultato deve riuscire");
+    failures += expect_int(header.token_len == (int)token_len,
+                           "header risultato deve contenere la lunghezza del token");
+    failures += expect_int(header.result_len == (int)result_size,
+                           "header risultato deve contenere la lunghezza del risultato");
+
+    failures += expect_int(readn(fd, token_buffer, token_len) == (ssize_t)token_len,
+                           "lettura token risultato deve riuscire");
+    failures += expect_int(memcmp(token_buffer, token, token_len) == 0,
+                           "token risultato deve essere preservato");
+
+    if (result_size > 0) {
+        failures += expect_int(readn(fd, result_buffer, result_size) == (ssize_t)result_size,
+                               "lettura risultato deve riuscire");
+        failures += expect_int(memcmp(result_buffer, result, result_size) == 0,
+                               "risultato opaco deve essere preservato");
+    }
+
+    return failures;
+}
+
 static int expect_pair_item(const mr_pair_item_t *item, const char *token, const void *value,
                             size_t value_size) {
     int failures = 0;
@@ -222,9 +256,11 @@ int main(void) {
     mr_line_queue_t queue = {0};
     mr_line_queue_t closed_queue = {0};
     mr_mapper_context_t mapper_context = {0};
+    mr_reducer_context_t reducer_context = {0};
     int input_fd = -1;
     int single_input_fd = -1;
     int emit_lock_ready = 0;
+    int reducer_lock_ready = 0;
     int worker_queue_ready = 0;
     int worker_lock_ready = 0;
     int failures = 0;
@@ -435,6 +471,46 @@ int main(void) {
         }
         failures += expect_int(close_pair(pipefd) == 0,
                                "close pipe mapper_emit_pair deve riuscire");
+    }
+
+    pipefd[0] = -1;
+    pipefd[1] = -1;
+    failures += expect_int(pipe(pipefd) == 0, "pipe reducer_emit_result deve riuscire");
+    if (pipefd[0] != -1 && pipefd[1] != -1) {
+        const unsigned char result[] = {'a', 0, 'b'};
+        reducer_lock_ready = mtx_init(&reducer_context.pipe_emit_lock, mtx_plain) == thrd_success;
+        failures += expect_int(reducer_lock_ready, "mutex emit reducer deve inizializzarsi");
+        if (reducer_lock_ready) {
+            reducer_context.out_fd = pipefd[1];
+
+            failures += expect_int(reducer_emit_result("Alpha9", result, sizeof(result),
+                                                       &reducer_context) == 0,
+                                   "reducer_emit_result deve scrivere un risultato valido");
+            failures += expect_result_record(pipefd[0], "Alpha9", result, sizeof(result));
+
+            failures += expect_int(reducer_emit_result("Zero", NULL, 0, &reducer_context) == 0,
+                                   "reducer_emit_result deve accettare risultato nullo di dimensione zero");
+            failures += expect_result_record(pipefd[0], "Zero", NULL, 0);
+
+            errno = 0;
+            failures += expect_int(reducer_emit_result("bad-token", result, sizeof(result),
+                                                       &reducer_context) == -1,
+                                   "reducer_emit_result deve rifiutare token non alfanumerici");
+            failures += expect_int(errno == EINVAL,
+                                   "reducer_emit_result con token invalido deve impostare EINVAL");
+
+            errno = 0;
+            failures += expect_int(reducer_emit_result("NoResult", NULL, 1, &reducer_context) == -1,
+                                   "reducer_emit_result deve rifiutare result NULL con dimensione positiva");
+            failures += expect_int(errno == EINVAL,
+                                   "reducer_emit_result con risultato invalido deve impostare EINVAL");
+
+            mtx_destroy(&reducer_context.pipe_emit_lock);
+            reducer_lock_ready = 0;
+            reducer_context = (mr_reducer_context_t){0};
+        }
+        failures += expect_int(close_pair(pipefd) == 0,
+                               "close pipe reducer_emit_result deve riuscire");
     }
 
     pipefd[0] = -1;
