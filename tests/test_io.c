@@ -238,6 +238,26 @@ static int test_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, void *em
     return emit("WorkerToken", value, sizeof(value), emit_arg);
 }
 
+static int sum_reducer(const char *token, const mr_value_t *values, size_t values_count,
+                       mr_emit_result_t emit, void *emit_arg, void *user_arg) {
+    (void)user_arg;
+
+    int total = 0;
+
+    for (size_t i = 0; i < values_count; i++) {
+        if (values[i].size != sizeof(int) || values[i].data == NULL) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        int value;
+        memcpy(&value, values[i].data, sizeof(value));
+        total += value;
+    }
+
+    return emit(token, &total, sizeof(total), emit_arg);
+}
+
 int main(void) {
     int pipefd[2] = {-1, -1};
     char input_path[] = "/tmp/mr-test-XXXXXX";
@@ -755,6 +775,118 @@ int main(void) {
         }
         failures += expect_int(close_pair(pipefd) == 0,
                                "close pipe collect_pair_groups deve riuscire");
+    }
+
+    {
+        int reducer_input[2] = {-1, -1};
+        int reducer_output[2] = {-1, -1};
+        int saved_stdin = -1;
+        int saved_stdout = -1;
+        mr_attr_t reducer_attr = {0};
+        mr_t reducer_mr = NULL;
+        const int alpha_first = 1;
+        const int alpha_second = 2;
+        const int beta_value = 5;
+        const int alpha_total = 3;
+        const int beta_total = 5;
+        int reducer_status = -1;
+
+        failures += expect_int(pipe(reducer_input) == 0,
+                               "pipe input reducer_process_main deve riuscire");
+        failures += expect_int(pipe(reducer_output) == 0,
+                               "pipe output reducer_process_main deve riuscire");
+
+        if (reducer_input[0] != -1 && reducer_input[1] != -1 &&
+            reducer_output[0] != -1 && reducer_output[1] != -1) {
+            emit_lock_ready = mtx_init(&mapper_context.pipe_emit_lock, mtx_plain) == thrd_success;
+            failures += expect_int(emit_lock_ready,
+                                   "mutex emit mapper per reducer_process_main deve inizializzarsi");
+            if (emit_lock_ready) {
+                mapper_context.out_fd = reducer_input[1];
+
+                failures += expect_int(mapper_emit_pair("Alpha", &alpha_first, sizeof(alpha_first),
+                                                        &mapper_context) == 0,
+                                       "reducer_process_main deve ricevere il primo valore Alpha");
+                failures += expect_int(mapper_emit_pair("Beta", &beta_value, sizeof(beta_value),
+                                                        &mapper_context) == 0,
+                                       "reducer_process_main deve ricevere il valore Beta");
+                failures += expect_int(mapper_emit_pair("Alpha", &alpha_second, sizeof(alpha_second),
+                                                        &mapper_context) == 0,
+                                       "reducer_process_main deve ricevere il secondo valore Alpha");
+
+                mtx_destroy(&mapper_context.pipe_emit_lock);
+                emit_lock_ready = 0;
+                mapper_context = (mr_mapper_context_t){0};
+            }
+
+            failures += expect_int(close(reducer_input[1]) == 0,
+                                   "chiusura input reducer_process_main deve inviare EOF");
+            reducer_input[1] = -1;
+
+            failures += expect_int(mr_attr_init(&reducer_attr) == 0,
+                                   "mr_attr_init per reducer_process_main deve riuscire");
+            failures += expect_int(mr_create(&reducer_mr, &reducer_attr, test_mapper, sum_reducer,
+                                             NULL) == 0,
+                                   "mr_create per reducer_process_main deve riuscire");
+
+            saved_stdin = dup(STDIN_FILENO);
+            saved_stdout = dup(STDOUT_FILENO);
+            failures += expect_int(saved_stdin != -1,
+                                   "dup stdin per reducer_process_main deve riuscire");
+            failures += expect_int(saved_stdout != -1,
+                                   "dup stdout per reducer_process_main deve riuscire");
+
+            if (reducer_mr != NULL && saved_stdin != -1 && saved_stdout != -1) {
+                int redirected = 1;
+
+                if (dup2(reducer_input[0], STDIN_FILENO) == -1) {
+                    failures += expect_int(0, "dup2 input reducer_process_main deve riuscire");
+                    redirected = 0;
+                }
+                if (dup2(reducer_output[1], STDOUT_FILENO) == -1) {
+                    failures += expect_int(0, "dup2 output reducer_process_main deve riuscire");
+                    redirected = 0;
+                }
+
+                if (redirected) {
+                    failures += expect_int(close(reducer_input[0]) == 0,
+                                           "chiusura fd input originale reducer_process_main deve riuscire");
+                    reducer_input[0] = -1;
+                    failures += expect_int(close(reducer_output[1]) == 0,
+                                           "chiusura fd output originale reducer_process_main deve riuscire");
+                    reducer_output[1] = -1;
+
+                    reducer_status = reducer_process_main(reducer_mr);
+                }
+
+                failures += expect_int(dup2(saved_stdin, STDIN_FILENO) != -1,
+                                       "ripristino stdin dopo reducer_process_main deve riuscire");
+                failures += expect_int(dup2(saved_stdout, STDOUT_FILENO) != -1,
+                                       "ripristino stdout dopo reducer_process_main deve riuscire");
+
+                if (redirected) {
+                    failures += expect_int(reducer_status == 0,
+                                           "reducer_process_main deve completare la riduzione");
+                    failures += expect_result_record(reducer_output[0], "Alpha", &alpha_total,
+                                                     sizeof(alpha_total));
+                    failures += expect_result_record(reducer_output[0], "Beta", &beta_total,
+                                                     sizeof(beta_total));
+                }
+            }
+        }
+
+        if (saved_stdin != -1) { failures += expect_int(close(saved_stdin) == 0,
+                                                        "close saved stdin deve riuscire"); }
+        if (saved_stdout != -1) { failures += expect_int(close(saved_stdout) == 0,
+                                                         "close saved stdout deve riuscire"); }
+        if (reducer_mr != NULL) {
+            failures += expect_int(mr_destroy(reducer_mr) == 0,
+                                   "mr_destroy per reducer_process_main deve riuscire");
+        }
+        failures += expect_int(close_pair(reducer_input) == 0,
+                               "close input reducer_process_main deve riuscire");
+        failures += expect_int(close_pair(reducer_output) == 0,
+                               "close output reducer_process_main deve riuscire");
     }
 
     pipefd[0] = -1;

@@ -2,6 +2,48 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-11
+
+### Avanzamento
+
+- È stato definito il formato interno dei risultati finali prodotti dal reducer tramite `mr_result_header_t`, distinto dal formato delle coppie intermedie.
+- È stata implementata `reducer_emit_result`, che valida il token, tratta il risultato come byte opaco e serializza header, token e risultato su pipe.
+- `reducer_emit_result` protegge la scrittura sulla pipe con un mutex, così header, token e payload non vengono interlecciati se in futuro più thread reducer emetteranno risultati.
+- Sono stati aggiunti test per risultati con byte nullo interno, risultati vuoti, token invalidi e `result == NULL` con dimensione positiva.
+- È stato implementato un primo `reducer_process_main` sequenziale: legge coppie da `STDIN_FILENO`, raccoglie i gruppi, invoca la callback reducer per ogni token e scrive i risultati su `STDOUT_FILENO`.
+- È stato aggiunto un test end-to-end locale per `reducer_process_main` usando `dup`/`dup2` per simulare la redirezione delle pipe del futuro processo reducer.
+- La callback di test `sum_reducer` interpreta i valori come `int`, li somma e produce un risultato finale serializzato dal framework.
+
+### Scelte tecniche
+
+- È stata introdotta `mr_result_header_t` invece di riusare `mr_pair_header_t`, perché il layout è simile ma il significato è diverso: coppie intermedie nel mapper, risultati finali nel reducer.
+- Il risultato finale viene trattato come byte opaco con lunghezza esplicita, senza usare funzioni da stringa C sul payload.
+- `reducer_process_main` usa `STDIN_FILENO` e `STDOUT_FILENO`, coerentemente con l'architettura basata su `fork()` e `dup2()`.
+- Il primo `reducer_process_main` è sequenziale: l'alternativa era creare subito thread reducer, ma avrebbe introdotto prima del necessario problemi di determinismo e ordinamento dell'output.
+- Su errore della callback reducer, `reducer_process_main` restituisce errore anche se alcuni risultati sono già stati scritti: i byte già emessi non vengono annullati, ma l'elaborazione viene segnalata come fallita.
+
+### Verifiche
+
+- `git diff --check` eseguito con esito positivo.
+- I test sono stati eseguiti nel dev container Ubuntu 24.04 e risultano passanti.
+- La compilazione diretta sull'host resta non significativa perché manca `<threads.h>`.
+
+### Prossimi passi
+
+1. Integrare il processo reducer dentro `mr_start`, sostituendo il drain temporaneo `mapper_to_main`.
+2. Creare la pipeline completa `main -> mapper -> reducer -> main` con tre pipe e due processi figli.
+3. Gestire la raccolta dei risultati finali nel processo principale e la scrittura su `output_path`.
+4. Definire una strategia per output deterministico, probabilmente ordinando i gruppi per token prima di invocare la callback reducer.
+
+### Punti da saper spiegare
+
+- Perché `reducer_emit_result` non interpreta il risultato come stringa C.
+- Perché il mutex protegge la scrittura del record sulla pipe, non il valore in sé.
+- Perché `reducer_process_main` usa `STDIN_FILENO` e `STDOUT_FILENO`.
+- Perché il reducer può invocare la callback solo dopo EOF sulla pipe mapper -> reducer.
+- Perché un primo reducer sequenziale è più semplice rispetto a introdurre subito thread reducer.
+- Cosa succede se una callback reducer fallisce dopo aver già emesso risultati.
+
 ## 2026-06-10
 
 ### Avanzamento

@@ -1056,8 +1056,7 @@ typedef struct {
     mtx_t pipe_emit_lock;
 } mr_reducer_context_t;
 
-static int reducer_emit_result(const char *token, const void *result, size_t result_size,
-                               void *emit_arg) {
+static int reducer_emit_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
     if (emit_arg == NULL) {
         errno = EINVAL;
         return -1;
@@ -1375,4 +1374,40 @@ static int collect_pair_groups(int fd, mr_pair_groups_t *groups) {
 
         pair_item_destroy(&pair);
     }
+}
+
+static int reducer_process_main(mr_t mr) {
+    MR_CHECK_NULL(mr);
+
+    mr_pair_groups_t groups = { 0 };
+    mr_reducer_context_t context = { 0 };
+    context.out_fd = STDOUT_FILENO;
+    int result = 0;
+    int saved_errno = 0;
+
+    if (mtx_init(&context.pipe_emit_lock, mtx_plain) != thrd_success) { return -1; }
+    if (collect_pair_groups(STDIN_FILENO, &groups) == -1) {
+        saved_errno = errno;
+        mtx_destroy(&context.pipe_emit_lock);
+        pair_groups_destroy(&groups);
+        errno = saved_errno;
+        return -1;
+    }
+
+    for (size_t i = 0; i < groups.count; i++) {
+        mr_pair_group_t *group = &groups.items[i];
+        int status =
+            mr->reducer(group->token, group->values, group->values_count, reducer_emit_result, &context, mr->user_arg);
+        if (status == -1) {
+            saved_errno = errno;
+            result = -1;
+            break;
+        }
+    }
+
+    pair_groups_destroy(&groups);
+    mtx_destroy(&context.pipe_emit_lock);
+
+    if (result == -1) { errno = saved_errno; }
+    return result;
 }
