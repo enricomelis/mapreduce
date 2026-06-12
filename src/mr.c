@@ -60,6 +60,7 @@ typedef struct {
 
 static int write_input_path_lines(int out_fd, const char *input_path);
 static int mapper_process_main(mr_t mr);
+static int reducer_process_main(mr_t mr);
 
 static void line_item_destroy(mr_line_item_t *item) {
     if (item == NULL) { return; }
@@ -345,13 +346,22 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     MR_CHECK_NULL(output_path);
 
     int main_to_mapper[2] = { -1, -1 };
-    int mapper_to_main[2] = { -1, -1 }; /* temporanea: sostituisce la futura pipe mapper -> reducer */
+    int mapper_to_reducer[2] = { -1, -1 };
+    int reducer_to_main[2] = { -1, -1 };
 
     if (pipe(main_to_mapper) == -1) { return -1; }
 
-    if (pipe(mapper_to_main) == -1) {
+    if (pipe(mapper_to_reducer) == -1) {
         close(main_to_mapper[0]);
         close(main_to_mapper[1]);
+        return -1;
+    }
+
+    if (pipe(reducer_to_main) == -1) {
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        close(mapper_to_reducer[0]);
+        close(mapper_to_reducer[1]);
         return -1;
     }
 
@@ -360,23 +370,58 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     if (mapper_pid == -1) {
         close(main_to_mapper[0]);
         close(main_to_mapper[1]);
-        close(mapper_to_main[0]);
-        close(mapper_to_main[1]);
+        close(mapper_to_reducer[0]);
+        close(mapper_to_reducer[1]);
+        close(reducer_to_main[0]);
+        close(reducer_to_main[1]);
 
         return -1;
     }
 
     if (mapper_pid == 0) {
         if (dup2(main_to_mapper[0], STDIN_FILENO) == -1) { _exit(1); }
-        if (dup2(mapper_to_main[1], STDOUT_FILENO) == -1) { _exit(1); }
+        if (dup2(mapper_to_reducer[1], STDOUT_FILENO) == -1) { _exit(1); }
 
         close(main_to_mapper[0]);
         close(main_to_mapper[1]);
-        close(mapper_to_main[0]);
-        close(mapper_to_main[1]);
+        close(mapper_to_reducer[0]);
+        close(mapper_to_reducer[1]);
+        close(reducer_to_main[0]);
+        close(reducer_to_main[1]);
 
         int mapper_status = mapper_process_main(mr);
         int exit_status = mapper_status == 0 ? 0 : 1;
+
+        _exit(exit_status);
+    }
+
+    pid_t reducer_pid = fork();
+
+    if (reducer_pid == -1) {
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        close(mapper_to_reducer[0]);
+        close(mapper_to_reducer[1]);
+        close(reducer_to_main[0]);
+        close(reducer_to_main[1]);
+        waitpid(mapper_pid, NULL, 0);
+
+        return -1;
+    }
+
+    if (reducer_pid == 0) {
+        if (dup2(mapper_to_reducer[0], STDIN_FILENO) == -1) { _exit(1); }
+        if (dup2(reducer_to_main[1], STDOUT_FILENO) == -1) { _exit(1); }
+
+        close(main_to_mapper[0]);
+        close(main_to_mapper[1]);
+        close(mapper_to_reducer[0]);
+        close(mapper_to_reducer[1]);
+        close(reducer_to_main[0]);
+        close(reducer_to_main[1]);
+
+        int reducer_status = reducer_process_main(mr);
+        int exit_status = reducer_status == 0 ? 0 : 1;
 
         _exit(exit_status);
     }
@@ -386,35 +431,31 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     if (close(main_to_mapper[0]) == -1) { result = -1; }
     main_to_mapper[0] = -1;
 
-    if (close(mapper_to_main[1]) == -1) { result = -1; }
-    mapper_to_main[1] = -1;
+    if (close(mapper_to_reducer[0]) == -1) { result = -1; }
+    mapper_to_reducer[0] = -1;
+
+    if (close(mapper_to_reducer[1]) == -1) { result = -1; }
+    mapper_to_reducer[1] = -1;
+
+    if (close(reducer_to_main[1]) == -1) { result = -1; }
+    reducer_to_main[1] = -1;
 
     if (write_input_path_lines(main_to_mapper[1], input_path) == -1) { result = -1; }
 
     if (close(main_to_mapper[1]) == -1) { result = -1; }
     main_to_mapper[1] = -1;
 
-    /* Inizio drain temporaneo: finche manca il reducer, il padre svuota l'output del mapper. */
-    char drain_buffer[4096];
-    for (;;) {
-        ssize_t n_read = read(mapper_to_main[0], drain_buffer, sizeof(drain_buffer));
+    int mapper_status;
+    if (waitpid(mapper_pid, &mapper_status, 0) == -1) { return -1; }
 
-        if (n_read > 0) { continue; }
-        if (n_read == 0) { break; }
-        if (errno == EINTR) { continue; }
+    int reducer_status;
+    if (waitpid(reducer_pid, &reducer_status, 0) == -1) { return -1; }
 
-        result = -1;
-        break;
-    }
-    /* Fine drain temporaneo. */
+    if (close(reducer_to_main[0]) == -1) { result = -1; }
+    reducer_to_main[0] = -1;
 
-    if (close(mapper_to_main[0]) == -1) { result = -1; }
-    mapper_to_main[0] = -1;
-
-    int status;
-    if (waitpid(mapper_pid, &status, 0) == -1) { return -1; }
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (!WIFEXITED(mapper_status) || WEXITSTATUS(mapper_status) != 0 || !WIFEXITED(reducer_status) ||
+        WEXITSTATUS(reducer_status) != 0) {
         errno = ECHILD;
         return -1;
     }
