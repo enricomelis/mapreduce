@@ -2,6 +2,48 @@
 
 Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante lo sviluppo. Non sostituisce il testo ufficiale: la fonte di verita resta `docs/Testo.md`, limitatamente al progetto base.
 
+## 2026-06-12
+
+### Avanzamento
+
+- `mr_start` non usa più la pipe temporanea `mapper_to_main` e il drain cieco dell'output mapper.
+- È stata impostata la pipeline completa `main -> mapper -> reducer -> main` con le tre pipe `main_to_mapper`, `mapper_to_reducer` e `reducer_to_main`.
+- Il processo reducer viene creato da `mr_start` e collega `mapper_to_reducer[0]` a `STDIN_FILENO` e `reducer_to_main[1]` a `STDOUT_FILENO`.
+- È stato aggiunto `write_reducer_results`, che legge i record finali dal reducer e li scrive su `output_path` mantenendo il formato binario `mr_result_header_t`, token e payload opaco.
+- `mr_start` legge i risultati del reducer prima di eseguire le `waitpid`, per evitare blocchi quando la pipe `reducer -> main` si riempie.
+- I gruppi del reducer vengono ordinati per token prima di invocare la callback reducer, così l'output è deterministico rispetto all'ordine dei token.
+- Il cleanup di `mr_start` è stato reso più robusto senza usare `goto`, tramite `close_if_open` e `wait_if_started`.
+- `tests/test_start.c` verifica ora un percorso end-to-end minimo: mapper, reducer, scrittura del file output e lettura del record finale.
+
+### Scelte tecniche
+
+- Il processo principale resta responsabile della scrittura del file `output_path`; il reducer scrive solo sul proprio standard output, collegato alla pipe verso il main.
+- `write_reducer_results` non interpreta il risultato finale: copia header, token e payload dopo aver validato le lunghezze del record.
+- `close_if_open` imposta il descrittore a `-1` prima della `close`, così il cleanup locale non tenta una seconda chiusura dello stesso valore.
+- `wait_if_started` ripete `waitpid` se viene interrotta da `EINTR` e marca il processo come raccolto impostando il PID a `-1`.
+- L'ordinamento deterministico viene applicato nel reducer, dopo la raccolta completa dei gruppi e prima delle callback, invece di provare a controllare l'ordine di emissione dei worker mapper.
+
+### Verifiche
+
+- `git diff --check -- src/mr.c tests/test_start.c` eseguito con esito positivo.
+- Il programmatore ha eseguito i test nel dev container Ubuntu 24.04 e ha confermato che passano.
+- La compilazione diretta sull'host resta non significativa perché manca `<threads.h>`.
+
+### Prossimi passi
+
+1. Rafforzare i test end-to-end di `mr_start` con più token e più risultati.
+2. Valutare i percorsi di errore della pipeline completa, soprattutto errori del reducer e output non scrivibile.
+3. Progettare il reducer multithread richiesto dal testo, mantenendo output deterministico.
+4. Implementare il sistema di log previsto dal progetto base.
+
+### Punti da saper spiegare
+
+- Perché il main deve leggere da `reducer_to_main[0]` prima di attendere i figli.
+- Perché `output_path` viene scritto dal processo principale e non dal reducer.
+- Perché `write_reducer_results` tratta il payload come byte opaco.
+- Perché il reducer ordina i gruppi per token prima di invocare le callback.
+- Perché `fd == -1` e `pid == -1` semplificano il cleanup.
+
 ## 2026-06-11
 
 ### Avanzamento
