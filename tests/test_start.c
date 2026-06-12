@@ -131,6 +131,19 @@ static int dummy_reducer(const char *token, const mr_value_t *values, size_t val
     return 0;
 }
 
+static int failing_reducer(const char *token, const mr_value_t *values, size_t values_count,
+                           mr_emit_result_t emit, void *emit_arg, void *user_arg) {
+    (void)token;
+    (void)values;
+    (void)values_count;
+    (void)emit;
+    (void)emit_arg;
+    (void)user_arg;
+
+    errno = EINVAL;
+    return -1;
+}
+
 static int expect_next_output_result(FILE *fp, const char *token, int expected_total) {
     int failures = 0;
     expected_result_header_t header;
@@ -181,6 +194,7 @@ int main(void) {
     mr_t mr = NULL;
     char valid_input_path[] = "/tmp/mr-start-valid-XXXXXX";
     char valid_output_path[] = "/tmp/mr-start-output-XXXXXX";
+    char reducer_failing_output_path[] = "/tmp/mr-start-reducer-failing-output-XXXXXX";
     char failing_input_path[] = "/tmp/mr-start-failing-XXXXXX";
     expected_line_t expected = { 0 };
     int failures = 0;
@@ -191,6 +205,11 @@ int main(void) {
     int output_fd = mkstemp(valid_output_path);
     failures += expect_int(output_fd != -1, "creazione path output deve riuscire");
     if (output_fd != -1) { failures += expect_int(close(output_fd) == 0, "close path output deve riuscire"); }
+    output_fd = mkstemp(reducer_failing_output_path);
+    failures += expect_int(output_fd != -1, "creazione path output reducer fallente deve riuscire");
+    if (output_fd != -1) {
+        failures += expect_int(close(output_fd) == 0, "close path output reducer fallente deve riuscire");
+    }
     failures += expect_int(create_text_file(failing_input_path, "beta\n") == 0,
                            "creazione input fallimento deve riuscire");
 
@@ -225,6 +244,20 @@ int main(void) {
         mr = NULL;
     }
 
+    failures += expect_int(mr_create(&mr, &attr, validating_mapper, failing_reducer, &expected) == 0,
+                           "mr_create con reducer fallente deve riuscire");
+
+    errno = 0;
+    failures += expect_int(mr_start(mr, valid_input_path, reducer_failing_output_path) == -1,
+                           "mr_start deve fallire se il processo reducer fallisce");
+    failures += expect_int(errno == ECHILD,
+                           "mr_start con reducer fallente deve segnalare terminazione non riuscita");
+
+    if (mr != NULL) {
+        failures += expect_int(mr_destroy(mr) == 0, "mr_destroy con reducer fallente deve riuscire");
+        mr = NULL;
+    }
+
     failures += expect_int(mr_create(&mr, &attr, failing_mapper, dummy_reducer, NULL) == 0,
                            "mr_create con mapper fallente deve riuscire");
 
@@ -240,6 +273,7 @@ int main(void) {
 
     unlink(valid_input_path);
     unlink(valid_output_path);
+    unlink(reducer_failing_output_path);
     unlink(failing_input_path);
 
     if (failures != 0) {
