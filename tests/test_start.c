@@ -61,7 +61,9 @@ static const char *base_name(const char *path) {
 static int validating_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, void *emit_arg,
                              void *user_arg) {
     expected_line_t *expected = user_arg;
-    const int value = 1;
+    const int alpha_value = 1;
+    const int beta_first = 2;
+    const int beta_second = 3;
 
     if (expected == NULL || line == NULL) {
         errno = EINVAL;
@@ -78,25 +80,31 @@ static int validating_mapper(const mr_file_line_t *line, mr_emit_pair_t emit, vo
         return -1;
     }
 
-    return emit("Token", &value, sizeof(value), emit_arg);
+    if (emit("Beta", &beta_first, sizeof(beta_first), emit_arg) == -1) { return -1; }
+    if (emit("Alpha", &alpha_value, sizeof(alpha_value), emit_arg) == -1) { return -1; }
+    return emit("Beta", &beta_second, sizeof(beta_second), emit_arg);
 }
 
 static int sum_reducer(const char *token, const mr_value_t *values, size_t values_count,
                        mr_emit_result_t emit, void *emit_arg, void *user_arg) {
     (void)user_arg;
 
-    if (token == NULL || strcmp(token, "Token") != 0 || values == NULL || values_count != 1) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (values[0].data == NULL || values[0].size != sizeof(int)) {
+    if (token == NULL || values == NULL || values_count == 0) {
         errno = EINVAL;
         return -1;
     }
 
     int total = 0;
-    memcpy(&total, values[0].data, sizeof(total));
+    for (size_t i = 0; i < values_count; i++) {
+        if (values[i].data == NULL || values[i].size != sizeof(int)) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        int value = 0;
+        memcpy(&value, values[i].data, sizeof(value));
+        total += value;
+    }
 
     return emit(token, &total, sizeof(total), emit_arg);
 }
@@ -123,15 +131,11 @@ static int dummy_reducer(const char *token, const mr_value_t *values, size_t val
     return 0;
 }
 
-static int expect_output_result(const char *path, const char *token, int expected_total) {
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL) { return 1; }
-
+static int expect_next_output_result(FILE *fp, const char *token, int expected_total) {
     int failures = 0;
     expected_result_header_t header;
     char token_buffer[32] = { 0 };
     int actual_total = 0;
-    int extra = 0;
     size_t token_len = strlen(token);
 
     failures += expect_int(fread(&header, sizeof(header), 1, fp) == 1,
@@ -152,10 +156,22 @@ static int expect_output_result(const char *path, const char *token, int expecte
                                "output deve contenere il totale");
         failures += expect_int(actual_total == expected_total,
                                "output deve contenere il totale atteso");
-        failures += expect_int(fread(&extra, 1, 1, fp) == 0,
-                               "output non deve contenere byte extra");
     }
 
+    return failures;
+}
+
+static int expect_output_results(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (fp == NULL) { return 1; }
+
+    int failures = 0;
+    int extra = 0;
+
+    failures += expect_next_output_result(fp, "Alpha", 1);
+    failures += expect_next_output_result(fp, "Beta", 5);
+    failures += expect_int(fread(&extra, 1, 1, fp) == 0,
+                           "output non deve contenere record extra");
     failures += expect_int(fclose(fp) == 0, "chiusura output deve riuscire");
     return failures;
 }
@@ -202,7 +218,7 @@ int main(void) {
     errno = 0;
     failures += expect_int(mr_start(mr, valid_input_path, valid_output_path) == 0,
                            "mr_start deve produrre un risultato valido");
-    failures += expect_output_result(valid_output_path, "Token", 1);
+    failures += expect_output_results(valid_output_path);
 
     if (mr != NULL) {
         failures += expect_int(mr_destroy(mr) == 0, "mr_destroy deve riuscire");
