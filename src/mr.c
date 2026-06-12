@@ -63,6 +63,8 @@ static int write_input_path_lines(int out_fd, const char *input_path);
 static int write_reducer_results(int in_fd, const char *output_path);
 static int mapper_process_main(mr_t mr);
 static int reducer_process_main(mr_t mr);
+static int close_if_open(int *fd);
+static int wait_if_started(pid_t *pid, int *status);
 
 static void line_item_destroy(mr_line_item_t *item) {
     if (item == NULL) { return; }
@@ -342,6 +344,28 @@ int mr_destroy(mr_t mr) {
     return 0;
 }
 
+static int close_if_open(int *fd) {
+    if (fd == NULL || *fd == -1) { return 0; }
+
+    int current = *fd;
+    *fd = -1;
+    return close(current);
+}
+
+static int wait_if_started(pid_t *pid, int *status) {
+    if (pid == NULL || *pid == -1) { return 0; }
+
+    for (;;) {
+        if (waitpid(*pid, status, 0) != -1) {
+            *pid = -1;
+            return 0;
+        }
+
+        if (errno == EINTR) { continue; }
+        return -1;
+    }
+}
+
 int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     MR_CHECK_NULL(mr);
     MR_CHECK_NULL(input_path);
@@ -350,46 +374,47 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     int main_to_mapper[2] = { -1, -1 };
     int mapper_to_reducer[2] = { -1, -1 };
     int reducer_to_main[2] = { -1, -1 };
+    pid_t mapper_pid = -1;
+    pid_t reducer_pid = -1;
+    int mapper_status = 0;
+    int reducer_status = 0;
+    int result = 0;
+    int saved_errno = 0;
 
-    if (pipe(main_to_mapper) == -1) { return -1; }
-
-    if (pipe(mapper_to_reducer) == -1) {
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        return -1;
+    if (pipe(main_to_mapper) == -1) {
+        saved_errno = errno;
+        result = -1;
     }
 
-    if (pipe(reducer_to_main) == -1) {
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        close(mapper_to_reducer[0]);
-        close(mapper_to_reducer[1]);
-        return -1;
+    if (result == 0 && pipe(mapper_to_reducer) == -1) {
+        saved_errno = errno;
+        result = -1;
     }
 
-    pid_t mapper_pid = fork();
-
-    if (mapper_pid == -1) {
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        close(mapper_to_reducer[0]);
-        close(mapper_to_reducer[1]);
-        close(reducer_to_main[0]);
-        close(reducer_to_main[1]);
-
-        return -1;
+    if (result == 0 && pipe(reducer_to_main) == -1) {
+        saved_errno = errno;
+        result = -1;
     }
 
-    if (mapper_pid == 0) {
+    if (result == 0) {
+        mapper_pid = fork();
+
+        if (mapper_pid == -1) {
+            saved_errno = errno;
+            result = -1;
+        }
+    }
+
+    if (result == 0 && mapper_pid == 0) {
         if (dup2(main_to_mapper[0], STDIN_FILENO) == -1) { _exit(1); }
         if (dup2(mapper_to_reducer[1], STDOUT_FILENO) == -1) { _exit(1); }
 
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        close(mapper_to_reducer[0]);
-        close(mapper_to_reducer[1]);
-        close(reducer_to_main[0]);
-        close(reducer_to_main[1]);
+        close_if_open(&main_to_mapper[0]);
+        close_if_open(&main_to_mapper[1]);
+        close_if_open(&mapper_to_reducer[0]);
+        close_if_open(&mapper_to_reducer[1]);
+        close_if_open(&reducer_to_main[0]);
+        close_if_open(&reducer_to_main[1]);
 
         int mapper_status = mapper_process_main(mr);
         int exit_status = mapper_status == 0 ? 0 : 1;
@@ -397,30 +422,25 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
         _exit(exit_status);
     }
 
-    pid_t reducer_pid = fork();
+    if (result == 0) {
+        reducer_pid = fork();
 
-    if (reducer_pid == -1) {
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        close(mapper_to_reducer[0]);
-        close(mapper_to_reducer[1]);
-        close(reducer_to_main[0]);
-        close(reducer_to_main[1]);
-        waitpid(mapper_pid, NULL, 0);
-
-        return -1;
+        if (reducer_pid == -1) {
+            saved_errno = errno;
+            result = -1;
+        }
     }
 
-    if (reducer_pid == 0) {
+    if (result == 0 && reducer_pid == 0) {
         if (dup2(mapper_to_reducer[0], STDIN_FILENO) == -1) { _exit(1); }
         if (dup2(reducer_to_main[1], STDOUT_FILENO) == -1) { _exit(1); }
 
-        close(main_to_mapper[0]);
-        close(main_to_mapper[1]);
-        close(mapper_to_reducer[0]);
-        close(mapper_to_reducer[1]);
-        close(reducer_to_main[0]);
-        close(reducer_to_main[1]);
+        close_if_open(&main_to_mapper[0]);
+        close_if_open(&main_to_mapper[1]);
+        close_if_open(&mapper_to_reducer[0]);
+        close_if_open(&mapper_to_reducer[1]);
+        close_if_open(&reducer_to_main[0]);
+        close_if_open(&reducer_to_main[1]);
 
         int reducer_status = reducer_process_main(mr);
         int exit_status = reducer_status == 0 ? 0 : 1;
@@ -428,42 +448,77 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
         _exit(exit_status);
     }
 
-    int result = 0;
-
-    if (close(main_to_mapper[0]) == -1) { result = -1; }
-    main_to_mapper[0] = -1;
-
-    if (close(mapper_to_reducer[0]) == -1) { result = -1; }
-    mapper_to_reducer[0] = -1;
-
-    if (close(mapper_to_reducer[1]) == -1) { result = -1; }
-    mapper_to_reducer[1] = -1;
-
-    if (close(reducer_to_main[1]) == -1) { result = -1; }
-    reducer_to_main[1] = -1;
-
-    if (write_input_path_lines(main_to_mapper[1], input_path) == -1) { result = -1; }
-
-    if (close(main_to_mapper[1]) == -1) { result = -1; }
-    main_to_mapper[1] = -1;
-
-    if (write_reducer_results(reducer_to_main[0], output_path) == -1) { result = -1; }
-
-    if (close(reducer_to_main[0]) == -1) { result = -1; }
-    reducer_to_main[0] = -1;
-
-    int mapper_status;
-    if (waitpid(mapper_pid, &mapper_status, 0) == -1) { return -1; }
-
-    int reducer_status;
-    if (waitpid(reducer_pid, &reducer_status, 0) == -1) { return -1; }
-
-    if (!WIFEXITED(mapper_status) || WEXITSTATUS(mapper_status) != 0 || !WIFEXITED(reducer_status) ||
-        WEXITSTATUS(reducer_status) != 0) {
-        errno = ECHILD;
-        return -1;
+    if (close_if_open(&main_to_mapper[0]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
     }
 
+    if (close_if_open(&mapper_to_reducer[0]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (close_if_open(&mapper_to_reducer[1]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (close_if_open(&reducer_to_main[1]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (result == 0 && write_input_path_lines(main_to_mapper[1], input_path) == -1) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (close_if_open(&main_to_mapper[1]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (result == 0 && write_reducer_results(reducer_to_main[0], output_path) == -1) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (close_if_open(&reducer_to_main[0]) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (mapper_pid != -1) {
+        if (wait_if_started(&mapper_pid, &mapper_status) == -1 && result == 0) {
+            saved_errno = errno;
+            result = -1;
+        }
+    }
+
+    if (reducer_pid != -1) {
+        if (wait_if_started(&reducer_pid, &reducer_status) == -1 && result == 0) {
+            saved_errno = errno;
+            result = -1;
+        }
+    }
+
+    if (result == 0 &&
+        (!WIFEXITED(mapper_status) || WEXITSTATUS(mapper_status) != 0 || !WIFEXITED(reducer_status) ||
+         WEXITSTATUS(reducer_status) != 0)) {
+        saved_errno = ECHILD;
+        result = -1;
+    }
+
+    close_if_open(&main_to_mapper[0]);
+    close_if_open(&main_to_mapper[1]);
+    close_if_open(&mapper_to_reducer[0]);
+    close_if_open(&mapper_to_reducer[1]);
+    close_if_open(&reducer_to_main[0]);
+    close_if_open(&reducer_to_main[1]);
+    wait_if_started(&mapper_pid, NULL);
+    wait_if_started(&reducer_pid, NULL);
+
+    if (result == -1) { errno = saved_errno; }
     return result;
 }
 
