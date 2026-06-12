@@ -1249,6 +1249,19 @@ typedef struct {
     mtx_t pipe_emit_lock;
 } mr_reducer_context_t;
 
+typedef struct {
+    char *token;
+    size_t token_len;
+    void *data;
+    size_t size;
+} mr_result_item_t;
+
+typedef struct {
+    mr_result_item_t *items;
+    size_t count;
+    size_t capacity;
+} mr_result_list_t;
+
 static int reducer_emit_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
     if (emit_arg == NULL) {
         errno = EINVAL;
@@ -1301,6 +1314,97 @@ static int reducer_emit_result(const char *token, const void *result, size_t res
     }
 
     mtx_unlock(&context->pipe_emit_lock);
+
+    return 0;
+}
+
+static void result_list_destroy(mr_result_list_t *list) {
+    if (list == NULL) { return; }
+
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->items[i].token);
+        free(list->items[i].data);
+    }
+
+    free(list->items);
+    *list = (mr_result_list_t){ 0 };
+}
+
+static int result_list_push(mr_result_list_t *list, const char *token, const void *result, size_t result_size) {
+    if (list == NULL || !is_valid_token(token) || (result_size > 0 && result == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t token_len = strlen(token);
+    if (token_len > INT_MAX || result_size > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    if (list->count == list->capacity) {
+        size_t new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;
+
+        if (new_capacity < list->capacity || new_capacity > SIZE_MAX / sizeof(*list->items)) {
+            errno = ENOMEM;
+            return -1;
+        }
+
+        mr_result_item_t *new_items = realloc(list->items, new_capacity * sizeof(*new_items));
+        if (new_items == NULL) { return -1; }
+
+        list->items = new_items;
+        list->capacity = new_capacity;
+    }
+
+    char *token_copy = malloc(token_len);
+    if (token_copy == NULL) { return -1; }
+
+    void *data_copy = NULL;
+    if (result_size > 0) {
+        data_copy = malloc(result_size);
+        if (data_copy == NULL) {
+            int saved_errno = errno;
+            free(token_copy);
+            errno = saved_errno;
+            return -1;
+        }
+        memcpy(data_copy, result, result_size);
+    }
+
+    memcpy(token_copy, token, token_len);
+
+    mr_result_item_t *item = &list->items[list->count];
+    item->token = token_copy;
+    item->token_len = token_len;
+    item->data = data_copy;
+    item->size = result_size;
+    list->count++;
+
+    return 0;
+}
+
+static int reducer_collect_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
+    return result_list_push(emit_arg, token, result, result_size);
+}
+
+static int write_result_list(int fd, const mr_result_list_t *list) {
+    if (list == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for (size_t i = 0; i < list->count; i++) {
+        const mr_result_item_t *item = &list->items[i];
+        mr_result_header_t header = {
+            .token_len = (int)item->token_len,
+            .result_len = (int)item->size,
+        };
+
+        if (writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) { return -1; }
+        if (writen(fd, item->token, item->token_len) != (ssize_t)item->token_len) { return -1; }
+        if (item->size > 0 && writen(fd, item->data, item->size) != (ssize_t)item->size) { return -1; }
+    }
 
     return 0;
 }
@@ -1388,6 +1492,7 @@ typedef struct {
     mr_value_t *values;
     size_t values_count;
     size_t values_capacity;
+    mr_result_list_t results;
 } mr_pair_group_t;
 
 typedef struct {
@@ -1406,6 +1511,7 @@ static void pair_group_destroy(mr_pair_group_t *group) {
         free((void *)group->values[i].data);
     }
     free(group->values);
+    result_list_destroy(&group->results);
 
     *group = (mr_pair_group_t){ 0 };
 
@@ -1581,19 +1687,68 @@ static int collect_pair_groups(int fd, mr_pair_groups_t *groups) {
     }
 }
 
+typedef struct {
+    mr_pair_groups_t *groups;
+    mr_reducer_t reducer;
+    void *user_arg;
+    size_t next_index;
+    int result;
+    int saved_errno;
+    mtx_t lock;
+} mr_reducer_worker_context_t;
+
+static int reducer_worker_main(void *arg) {
+    if (arg == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    mr_reducer_worker_context_t *context = arg;
+
+    for (;;) {
+        if (mtx_lock(&context->lock) != thrd_success) {
+            errno = EIO;
+            return -1;
+        }
+
+        if (context->result == -1 || context->next_index == context->groups->count) {
+            mtx_unlock(&context->lock);
+            return context->result;
+        }
+
+        size_t index = context->next_index;
+        context->next_index++;
+        mtx_unlock(&context->lock);
+
+        mr_pair_group_t *group = &context->groups->items[index];
+        int status = context->reducer(group->token, group->values, group->values_count, reducer_collect_result,
+                                      &group->results, context->user_arg);
+
+        if (status == -1) {
+            int saved_errno = errno;
+
+            if (mtx_lock(&context->lock) == thrd_success) {
+                if (context->result == 0) {
+                    context->saved_errno = saved_errno;
+                    context->result = -1;
+                }
+                mtx_unlock(&context->lock);
+            }
+
+            errno = saved_errno;
+            return -1;
+        }
+    }
+}
+
 static int reducer_process_main(mr_t mr) {
     MR_CHECK_NULL(mr);
 
     mr_pair_groups_t groups = { 0 };
-    mr_reducer_context_t context = { 0 };
-    context.out_fd = STDOUT_FILENO;
     int result = 0;
     int saved_errno = 0;
 
-    if (mtx_init(&context.pipe_emit_lock, mtx_plain) != thrd_success) { return -1; }
     if (collect_pair_groups(STDIN_FILENO, &groups) == -1) {
         saved_errno = errno;
-        mtx_destroy(&context.pipe_emit_lock);
         pair_groups_destroy(&groups);
         errno = saved_errno;
         return -1;
@@ -1601,19 +1756,84 @@ static int reducer_process_main(mr_t mr) {
 
     qsort(groups.items, groups.count, sizeof(*groups.items), pair_group_compare);
 
-    for (size_t i = 0; i < groups.count; i++) {
-        mr_pair_group_t *group = &groups.items[i];
-        int status =
-            mr->reducer(group->token, group->values, group->values_count, reducer_emit_result, &context, mr->user_arg);
-        if (status == -1) {
-            saved_errno = errno;
+    mr_reducer_worker_context_t context = {
+        .groups = &groups,
+        .reducer = mr->reducer,
+        .user_arg = mr->user_arg,
+        .next_index = 0,
+        .result = 0,
+        .saved_errno = 0,
+    };
+
+    if (mtx_init(&context.lock, mtx_plain) != thrd_success) {
+        pair_groups_destroy(&groups);
+        errno = EIO;
+        return -1;
+    }
+
+    thrd_t *worker_threads = malloc(mr->attr.reducer_threads * sizeof(*worker_threads));
+    if (worker_threads == NULL) {
+        saved_errno = errno;
+        mtx_destroy(&context.lock);
+        pair_groups_destroy(&groups);
+        errno = saved_errno;
+        return -1;
+    }
+
+    size_t workers_created = 0;
+
+    for (size_t i = 0; i < mr->attr.reducer_threads; i++) {
+        if (thrd_create(&worker_threads[i], reducer_worker_main, &context) != thrd_success) {
+            saved_errno = EIO;
             result = -1;
             break;
         }
+        workers_created++;
     }
 
+    if (result == -1) {
+        if (mtx_lock(&context.lock) == thrd_success) {
+            context.result = -1;
+            if (context.saved_errno == 0) { context.saved_errno = saved_errno; }
+            mtx_unlock(&context.lock);
+        }
+    }
+
+    int join_failed = 0;
+    int worker_failed = 0;
+
+    for (size_t i = 0; i < workers_created; i++) {
+        int status = 0;
+        if (thrd_join(worker_threads[i], &status) != thrd_success) {
+            join_failed = 1;
+        } else if (status != 0) {
+            worker_failed = 1;
+        }
+    }
+
+    if (result == 0 && join_failed != 0) {
+        saved_errno = EIO;
+        result = -1;
+    }
+
+    if (result == 0 && (worker_failed != 0 || context.result == -1)) {
+        saved_errno = context.saved_errno != 0 ? context.saved_errno : EIO;
+        result = -1;
+    }
+
+    if (result == 0) {
+        for (size_t i = 0; i < groups.count; i++) {
+            if (write_result_list(STDOUT_FILENO, &groups.items[i].results) == -1) {
+                saved_errno = errno;
+                result = -1;
+                break;
+            }
+        }
+    }
+
+    free(worker_threads);
     pair_groups_destroy(&groups);
-    mtx_destroy(&context.pipe_emit_lock);
+    mtx_destroy(&context.lock);
 
     if (result == -1) { errno = saved_errno; }
     return result;

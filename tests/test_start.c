@@ -200,6 +200,8 @@ int main(void) {
     int failures = 0;
 
     failures += expect_int(mr_attr_init(&attr) == 0, "mr_attr_init deve riuscire");
+    failures += expect_int(mr_attr_set_reducer_threads(&attr, 2) == 0,
+                           "mr_attr_set_reducer_threads deve accettare due worker");
     failures += expect_int(create_text_file(valid_input_path, "alpha\n") == 0,
                            "creazione input valido deve riuscire");
     int output_fd = mkstemp(valid_output_path);
