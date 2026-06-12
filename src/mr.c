@@ -3,6 +3,7 @@
 #include "mr.h"
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -59,6 +60,7 @@ typedef struct {
 } mr_input_file_t;
 
 static int write_input_path_lines(int out_fd, const char *input_path);
+static int write_reducer_results(int in_fd, const char *output_path);
 static int mapper_process_main(mr_t mr);
 static int reducer_process_main(mr_t mr);
 
@@ -445,14 +447,16 @@ int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     if (close(main_to_mapper[1]) == -1) { result = -1; }
     main_to_mapper[1] = -1;
 
+    if (write_reducer_results(reducer_to_main[0], output_path) == -1) { result = -1; }
+
+    if (close(reducer_to_main[0]) == -1) { result = -1; }
+    reducer_to_main[0] = -1;
+
     int mapper_status;
     if (waitpid(mapper_pid, &mapper_status, 0) == -1) { return -1; }
 
     int reducer_status;
     if (waitpid(reducer_pid, &reducer_status, 0) == -1) { return -1; }
-
-    if (close(reducer_to_main[0]) == -1) { result = -1; }
-    reducer_to_main[0] = -1;
 
     if (!WIFEXITED(mapper_status) || WEXITSTATUS(mapper_status) != 0 || !WIFEXITED(reducer_status) ||
         WEXITSTATUS(reducer_status) != 0) {
@@ -516,6 +520,99 @@ static ssize_t writen(int fd, const void *buf, size_t n) {
     }
 
     return (ssize_t)total;
+}
+
+static int write_reducer_results(int in_fd, const char *output_path) {
+    if (output_path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int out_fd = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (out_fd == -1) { return -1; }
+
+    int result = 0;
+    int saved_errno = 0;
+
+    for (;;) {
+        mr_result_header_t header;
+        ssize_t n_read = readn(in_fd, &header, sizeof(header));
+
+        if (n_read == 0) { break; }
+        if (n_read == -1) {
+            saved_errno = errno;
+            result = -1;
+            break;
+        }
+
+        if (header.token_len <= 0 || header.result_len < 0) {
+            saved_errno = EPROTO;
+            result = -1;
+            break;
+        }
+
+        size_t token_len = (size_t)header.token_len;
+        size_t result_len = (size_t)header.result_len;
+
+        char *token = malloc(token_len);
+        if (token == NULL) {
+            saved_errno = errno;
+            result = -1;
+            break;
+        }
+
+        void *payload = NULL;
+        if (result_len > 0) {
+            payload = malloc(result_len);
+            if (payload == NULL) {
+                saved_errno = errno;
+                free(token);
+                result = -1;
+                break;
+            }
+        }
+
+        n_read = readn(in_fd, token, token_len);
+        if (n_read != (ssize_t)token_len) {
+            saved_errno = n_read == -1 ? errno : EPROTO;
+            free(token);
+            free(payload);
+            result = -1;
+            break;
+        }
+
+        if (result_len > 0) {
+            n_read = readn(in_fd, payload, result_len);
+            if (n_read != (ssize_t)result_len) {
+                saved_errno = n_read == -1 ? errno : EPROTO;
+                free(token);
+                free(payload);
+                result = -1;
+                break;
+            }
+        }
+
+        if (writen(out_fd, &header, sizeof(header)) != (ssize_t)sizeof(header) ||
+            writen(out_fd, token, token_len) != (ssize_t)token_len ||
+            (result_len > 0 && writen(out_fd, payload, result_len) != (ssize_t)result_len)) {
+            saved_errno = errno;
+            free(token);
+            free(payload);
+            result = -1;
+            break;
+        }
+
+        free(token);
+        free(payload);
+    }
+
+    if (close(out_fd) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    }
+
+    if (result == -1) { errno = saved_errno; }
+    return result;
 }
 
 /* ====================================================================== */
