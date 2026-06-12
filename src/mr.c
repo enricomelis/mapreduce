@@ -1389,6 +1389,18 @@ static mr_pair_group_t *pair_groups_find(mr_pair_groups_t *groups, const char *t
     return NULL;
 }
 
+static int pair_group_compare(const void *left, const void *right) {
+    const mr_pair_group_t *a = left;
+    const mr_pair_group_t *b = right;
+    size_t min_len = a->token_len < b->token_len ? a->token_len : b->token_len;
+    int cmp = memcmp(a->token, b->token, min_len);
+
+    if (cmp != 0) { return cmp; }
+    if (a->token_len < b->token_len) { return -1; }
+    if (a->token_len > b->token_len) { return 1; }
+    return 0;
+}
+
 static mr_pair_group_t *pair_groups_push_group(mr_pair_groups_t *groups, mr_pair_item_t *item) {
     if (groups == NULL || item == NULL || item->token == NULL || item->token_len == 0) {
         errno = EINVAL;
@@ -1531,6 +1543,8 @@ static int reducer_process_main(mr_t mr) {
         errno = saved_errno;
         return -1;
     }
+
+    qsort(groups.items, groups.count, sizeof(*groups.items), pair_group_compare);
 
     for (size_t i = 0; i < groups.count; i++) {
         mr_pair_group_t *group = &groups.items[i];
