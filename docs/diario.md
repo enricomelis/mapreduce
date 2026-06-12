@@ -44,6 +44,41 @@ Questo file raccoglie lo stato operativo del progetto e andra aggiornato durante
 - Perché il reducer ordina i gruppi per token prima di invocare le callback.
 - Perché `fd == -1` e `pid == -1` semplificano il cleanup.
 
+### Aggiornamento fine sessione
+
+#### Avanzamento
+
+- Il processo reducer ora usa worker C11 anche nella fase di reduce.
+- I worker reducer prendono i gruppi ordinati tramite un indice condiviso protetto da mutex e invocano in parallelo la callback `reducer` fornita dall'utente.
+- I risultati prodotti dalla callback non vengono più scritti direttamente sulla pipe: vengono raccolti nella lista `results` del gruppo.
+- Dopo la terminazione dei worker, `reducer_process_main` scrive i risultati su `STDOUT_FILENO` in ordine di gruppo, mantenendo output deterministico.
+- Sono stati rimossi `mr_reducer_context_t` e `reducer_emit_result`, perché erano legati al vecchio percorso di scrittura diretta.
+- `tests/test_io.c` verifica ora il percorso reale di `reducer_process_main` con due worker reducer e output ordinato `Alpha`, `Beta`, `Gamma`.
+
+#### Scelte tecniche
+
+- Il parallelismo del reducer è applicato alle invocazioni della callback `reducer`, non alla scrittura finale.
+- Ogni gruppo possiede la propria lista di risultati, quindi non serve sincronizzare l'emissione dei risultati del singolo gruppo.
+- Il mutex del contesto reducer protegge solo lo stato condiviso dei worker: `next_index`, `result` e `saved_errno`.
+
+#### Verifiche
+
+- `git diff --check` eseguito con esito positivo.
+- Il programmatore ha eseguito i test nel dev container Ubuntu 24.04 e ha confermato che passano.
+
+#### Prossimi passi
+
+1. Implementare un programma di esempio, probabilmente word count.
+2. Implementare il log minimo richiesto dal testo.
+3. Preparare la relazione documentando pipeline, protocolli pipe, threading C11 e determinismo dell'output.
+
+#### Punti da saper spiegare
+
+- Perché i worker reducer non scrivono direttamente sulla pipe.
+- Dove vengono salvati i risultati prodotti dalla callback reducer.
+- Perché `context.lock` protegge il contesto dei worker ma non i singoli gruppi.
+- Come viene mantenuto l'output deterministico nonostante il calcolo parallelo.
+
 ## 2026-06-11
 
 ### Avanzamento
