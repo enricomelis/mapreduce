@@ -276,11 +276,9 @@ int main(void) {
     mr_line_queue_t queue = {0};
     mr_line_queue_t closed_queue = {0};
     mr_mapper_context_t mapper_context = {0};
-    mr_reducer_context_t reducer_context = {0};
     int input_fd = -1;
     int single_input_fd = -1;
     int emit_lock_ready = 0;
-    int reducer_lock_ready = 0;
     int worker_queue_ready = 0;
     int worker_lock_ready = 0;
     int failures = 0;
@@ -491,46 +489,6 @@ int main(void) {
         }
         failures += expect_int(close_pair(pipefd) == 0,
                                "close pipe mapper_emit_pair deve riuscire");
-    }
-
-    pipefd[0] = -1;
-    pipefd[1] = -1;
-    failures += expect_int(pipe(pipefd) == 0, "pipe reducer_emit_result deve riuscire");
-    if (pipefd[0] != -1 && pipefd[1] != -1) {
-        const unsigned char result[] = {'a', 0, 'b'};
-        reducer_lock_ready = mtx_init(&reducer_context.pipe_emit_lock, mtx_plain) == thrd_success;
-        failures += expect_int(reducer_lock_ready, "mutex emit reducer deve inizializzarsi");
-        if (reducer_lock_ready) {
-            reducer_context.out_fd = pipefd[1];
-
-            failures += expect_int(reducer_emit_result("Alpha9", result, sizeof(result),
-                                                       &reducer_context) == 0,
-                                   "reducer_emit_result deve scrivere un risultato valido");
-            failures += expect_result_record(pipefd[0], "Alpha9", result, sizeof(result));
-
-            failures += expect_int(reducer_emit_result("Zero", NULL, 0, &reducer_context) == 0,
-                                   "reducer_emit_result deve accettare risultato nullo di dimensione zero");
-            failures += expect_result_record(pipefd[0], "Zero", NULL, 0);
-
-            errno = 0;
-            failures += expect_int(reducer_emit_result("bad-token", result, sizeof(result),
-                                                       &reducer_context) == -1,
-                                   "reducer_emit_result deve rifiutare token non alfanumerici");
-            failures += expect_int(errno == EINVAL,
-                                   "reducer_emit_result con token invalido deve impostare EINVAL");
-
-            errno = 0;
-            failures += expect_int(reducer_emit_result("NoResult", NULL, 1, &reducer_context) == -1,
-                                   "reducer_emit_result deve rifiutare result NULL con dimensione positiva");
-            failures += expect_int(errno == EINVAL,
-                                   "reducer_emit_result con risultato invalido deve impostare EINVAL");
-
-            mtx_destroy(&reducer_context.pipe_emit_lock);
-            reducer_lock_ready = 0;
-            reducer_context = (mr_reducer_context_t){0};
-        }
-        failures += expect_int(close_pair(pipefd) == 0,
-                               "close pipe reducer_emit_result deve riuscire");
     }
 
     pipefd[0] = -1;
@@ -787,8 +745,11 @@ int main(void) {
         const int alpha_first = 1;
         const int alpha_second = 2;
         const int beta_value = 5;
+        const int gamma_value = 7;
         const int alpha_total = 3;
         const int beta_total = 5;
+        const int gamma_total = 7;
+        unsigned char extra_result_byte = 0;
         int reducer_status = -1;
 
         failures += expect_int(pipe(reducer_input) == 0,
@@ -804,6 +765,9 @@ int main(void) {
             if (emit_lock_ready) {
                 mapper_context.out_fd = reducer_input[1];
 
+                failures += expect_int(mapper_emit_pair("Gamma", &gamma_value, sizeof(gamma_value),
+                                                        &mapper_context) == 0,
+                                       "reducer_process_main deve ricevere il valore Gamma");
                 failures += expect_int(mapper_emit_pair("Alpha", &alpha_first, sizeof(alpha_first),
                                                         &mapper_context) == 0,
                                        "reducer_process_main deve ricevere il primo valore Alpha");
@@ -825,6 +789,8 @@ int main(void) {
 
             failures += expect_int(mr_attr_init(&reducer_attr) == 0,
                                    "mr_attr_init per reducer_process_main deve riuscire");
+            failures += expect_int(mr_attr_set_reducer_threads(&reducer_attr, 2) == 0,
+                                   "reducer_process_main deve usare due worker reducer");
             failures += expect_int(mr_create(&reducer_mr, &reducer_attr, test_mapper, sum_reducer,
                                              NULL) == 0,
                                    "mr_create per reducer_process_main deve riuscire");
@@ -871,6 +837,10 @@ int main(void) {
                                                      sizeof(alpha_total));
                     failures += expect_result_record(reducer_output[0], "Beta", &beta_total,
                                                      sizeof(beta_total));
+                    failures += expect_result_record(reducer_output[0], "Gamma", &gamma_total,
+                                                     sizeof(gamma_total));
+                    failures += expect_int(readn(reducer_output[0], &extra_result_byte, 1) == 0,
+                                           "reducer_process_main multithread non deve produrre record extra");
                 }
             }
         }

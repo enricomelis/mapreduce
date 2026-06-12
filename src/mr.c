@@ -1245,11 +1245,6 @@ typedef struct {
 } mr_pair_item_t;
 
 typedef struct {
-    int out_fd;
-    mtx_t pipe_emit_lock;
-} mr_reducer_context_t;
-
-typedef struct {
     char *token;
     size_t token_len;
     void *data;
@@ -1261,62 +1256,6 @@ typedef struct {
     size_t count;
     size_t capacity;
 } mr_result_list_t;
-
-static int reducer_emit_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
-    if (emit_arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-    mr_reducer_context_t *context = emit_arg;
-
-    if (!is_valid_token(token) || (result_size > 0 && result == NULL)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    size_t token_len = strlen(token);
-    if (token_len > INT_MAX || result_size > INT_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-
-    mr_result_header_t header = {
-        .token_len = (int)token_len,
-        .result_len = (int)result_size,
-    };
-
-    if (mtx_lock(&context->pipe_emit_lock) != thrd_success) {
-        errno = EIO;
-        return -1;
-    }
-
-    int saved_errno = 0;
-
-    if (writen(context->out_fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) {
-        saved_errno = errno;
-        mtx_unlock(&context->pipe_emit_lock);
-        errno = saved_errno;
-        return -1;
-    }
-
-    if (writen(context->out_fd, token, token_len) != (ssize_t)token_len) {
-        saved_errno = errno;
-        mtx_unlock(&context->pipe_emit_lock);
-        errno = saved_errno;
-        return -1;
-    }
-
-    if (result_size > 0 && writen(context->out_fd, result, result_size) != (ssize_t)result_size) {
-        saved_errno = errno;
-        mtx_unlock(&context->pipe_emit_lock);
-        errno = saved_errno;
-        return -1;
-    }
-
-    mtx_unlock(&context->pipe_emit_lock);
-
-    return 0;
-}
 
 static void result_list_destroy(mr_result_list_t *list) {
     if (list == NULL) { return; }
