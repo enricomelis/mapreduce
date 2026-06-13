@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 static int expect_int(int condition, const char *message) {
     if (!condition) {
@@ -25,7 +26,8 @@ int main(void) {
     failures += expect_int(attr.mapper_threads == 1, "mapper_threads default deve essere 1");
     failures += expect_int(attr.reducer_threads == 1, "reducer_threads default deve essere 1");
     failures += expect_int(attr.queue_size == 64, "queue_size default deve essere 64");
-    failures += expect_int(attr.log_file == NULL, "log_file default deve essere NULL");
+    failures += expect_int(strcmp(attr.log_file, "mr.log") == 0,
+                           "log_file default deve essere mr.log");
 
     failures += expect_int(mr_attr_set_mapper_threads(&attr, 4) == 0,
                            "mr_attr_set_mapper_threads deve accettare valori positivi");
@@ -49,8 +51,8 @@ int main(void) {
 
     failures += expect_int(mr_attr_set_log_file(&attr, NULL) == 0,
                            "mr_attr_set_log_file deve accettare NULL per il default");
-    failures += expect_int(attr.log_file == NULL,
-                           "log_file deve poter tornare a NULL");
+    failures += expect_int(strcmp(attr.log_file, "mr.log") == 0,
+                           "log_file deve tornare al default");
 
     errno = 0;
     failures += expect_int(mr_attr_set_mapper_threads(NULL, 1) == -1,

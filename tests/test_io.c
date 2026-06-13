@@ -822,7 +822,7 @@ int main(void) {
                                            "chiusura fd output originale reducer_process_main deve riuscire");
                     reducer_output[1] = -1;
 
-                    reducer_status = reducer_process_main(reducer_mr);
+                    reducer_status = reducer_process_main(reducer_mr, -1);
                 }
 
                 failures += expect_int(dup2(saved_stdin, STDIN_FILENO) != -1,
@@ -883,11 +883,16 @@ int main(void) {
             mapper_context.mapper = test_mapper;
             mapper_context.user_arg = NULL;
             mapper_context.out_fd = pipefd[1];
+            mapper_context.log_fd = -1;
+            mr_mapper_worker_arg_t worker_arg = {
+                .context = &mapper_context,
+                .index = 0,
+            };
 
             failures += expect_int(line_queue_push(&mapper_context.queue, &queued_item) == 0,
                                    "push item per mapper_worker_main deve riuscire");
             line_queue_close(&mapper_context.queue);
-            failures += expect_int(mapper_worker_main(&mapper_context) == 0,
+            failures += expect_int(mapper_worker_main(&worker_arg) == 0,
                                    "mapper_worker_main deve consumare la coda chiusa");
             failures += expect_pair_record(pipefd[0], "WorkerToken", expected_value,
                                            sizeof(expected_value));
@@ -921,7 +926,7 @@ int main(void) {
         pipefd[1] = -1;
         failures += expect_int(pipe(pipefd) == 0, "pipe write_file_lines deve riuscire");
         if (pipefd[0] != -1 && pipefd[1] != -1) {
-            failures += expect_int(write_file_lines(pipefd[1], input_path, "input.txt") == 0,
+            failures += expect_int(write_file_lines(pipefd[1], input_path, "input.txt", -1, NULL, NULL) == 0,
                                    "write_file_lines deve scrivere tutte le righe del file");
             failures += expect_int(close(pipefd[1]) == 0,
                                    "chiusura lato scrittura write_file_lines deve riuscire");
@@ -961,7 +966,7 @@ int main(void) {
         failures += expect_int(pipe(pipefd) == 0,
                                "pipe write_input_path_lines file singolo deve riuscire");
         if (pipefd[0] != -1 && pipefd[1] != -1) {
-            failures += expect_int(write_input_path_lines(pipefd[1], single_input_path) == 0,
+            failures += expect_int(write_input_path_lines(pipefd[1], single_input_path, -1, NULL, NULL) == 0,
                                    "write_input_path_lines deve accettare un file regolare");
             failures += expect_int(close(pipefd[1]) == 0,
                                    "chiusura lato scrittura file singolo deve riuscire");
@@ -1018,7 +1023,7 @@ int main(void) {
         failures += expect_int(pipe(pipefd) == 0,
                                "pipe write_input_path_lines directory deve riuscire");
         if (pipefd[0] != -1 && pipefd[1] != -1) {
-            failures += expect_int(write_input_path_lines(pipefd[1], created_directory) == 0,
+            failures += expect_int(write_input_path_lines(pipefd[1], created_directory, -1, NULL, NULL) == 0,
                                    "write_input_path_lines deve accettare una directory");
             failures += expect_int(close(pipefd[1]) == 0,
                                    "chiusura lato scrittura directory deve riuscire");
@@ -1038,7 +1043,7 @@ int main(void) {
                                "pipe write_input_path_lines tipo non supportato deve riuscire");
         if (pipefd[0] != -1 && pipefd[1] != -1) {
             errno = 0;
-            failures += expect_int(write_input_path_lines(pipefd[1], fifo_path) == -1,
+            failures += expect_int(write_input_path_lines(pipefd[1], fifo_path, -1, NULL, NULL) == -1,
                                    "write_input_path_lines deve rifiutare un path non supportato");
             failures += expect_int(errno == EINVAL,
                                    "write_input_path_lines su tipo non supportato deve impostare EINVAL");
