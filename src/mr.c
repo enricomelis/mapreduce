@@ -71,6 +71,14 @@ typedef struct {
     mtx_t *lock;
 } mr_log_collector_arg_t;
 
+/* ==== helper generici ==== */
+
+/*
+ * Valori di ritorno:
+ * - n: numero di byte richiesti letti completamente;
+ * - 0: EOF prima di leggere qualsiasi byte;
+ * - -1: errore o EOF dopo una lettura parziale.
+ */
 static ssize_t readn(int fd, void *buf, size_t n) {
     char *p = buf;
     size_t total = 0;
@@ -168,7 +176,8 @@ typedef struct {
 } mr_line_queue_t;
 
 static int line_queue_init(mr_line_queue_t *queue, size_t capacity) {
-    if (capacity == 0 || queue == NULL) {
+    MR_CHECK_NULL(queue);
+    if (capacity == 0) {
         errno = EINVAL;
         return -1;
     }
@@ -226,10 +235,8 @@ static void line_queue_destroy(mr_line_queue_t *queue) {
 }
 
 static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t *item) {
-    if (queue == NULL || item == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(queue);
+    MR_CHECK_NULL(item);
 
     if (mtx_lock(&queue->lock) != thrd_success) { return -1; }
 
@@ -257,11 +264,15 @@ static int line_queue_push(mr_line_queue_t *queue, mr_line_item_t *item) {
     return 0;
 }
 
+/*
+ * Valori di ritorno:
+ * - 1: elemento estratto dalla coda;
+ * - 0: coda chiusa e vuota;
+ * - -1: errore.
+ */
 static int line_queue_pop(mr_line_queue_t *queue, mr_line_item_t *item) {
-    if (queue == NULL || item == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(queue);
+    MR_CHECK_NULL(item);
 
     if (mtx_lock(&queue->lock) != thrd_success) { return -1; }
 
@@ -299,7 +310,8 @@ static void line_queue_close(mr_line_queue_t *queue) {
 }
 
 static int format_timestamp(char *buffer, size_t size) {
-    if (buffer == NULL || size == 0) {
+    MR_CHECK_NULL(buffer);
+    if (size == 0) {
         errno = EINVAL;
         return -1;
     }
@@ -370,10 +382,7 @@ static int log_message(int fd, mtx_t *lock, const char *process, const char *thr
 }
 
 static int log_collector_main(void *arg) {
-    if (arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(arg);
 
     mr_log_collector_arg_t *collector = arg;
     char buffer[MR_LOG_LINE_SIZE];
@@ -412,10 +421,7 @@ static int log_collector_main(void *arg) {
 }
 
 int mr_attr_init(mr_attr_t *attr) {
-    if (attr == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(attr);
 
     attr->mapper_threads = 1;
     attr->reducer_threads = 1;
@@ -426,10 +432,7 @@ int mr_attr_init(mr_attr_t *attr) {
 }
 
 int mr_attr_destroy(mr_attr_t *attr) {
-    if (attr == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(attr);
 
     attr->mapper_threads = 0;
     attr->reducer_threads = 0;
@@ -512,112 +515,13 @@ int mr_destroy(mr_t mr) {
     return 0;
 }
 
-static int write_reducer_results(int in_fd, const char *output_path, int log_fd, mtx_t *log_lock,
-                                 size_t *results_written) {
-    if (output_path == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (results_written != NULL) { *results_written = 0; }
 
-    log_message(log_fd, log_lock, "main", "main", "FILE_OPEN", "output path=%s", output_path);
-    int out_fd = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (out_fd == -1) { return -1; }
+/* ==== main verso mapper ==== */
 
-    int result = 0;
-    int saved_errno = 0;
-
-    for (;;) {
-        mr_result_header_t header;
-        ssize_t n_read = readn(in_fd, &header, sizeof(header));
-
-        if (n_read == 0) { break; }
-        if (n_read == -1) {
-            saved_errno = errno;
-            result = -1;
-            break;
-        }
-
-        if (header.token_len <= 0 || header.result_len < 0) {
-            saved_errno = EPROTO;
-            result = -1;
-            break;
-        }
-
-        size_t token_len = (size_t)header.token_len;
-        size_t result_len = (size_t)header.result_len;
-
-        char *token = malloc(token_len);
-        if (token == NULL) {
-            saved_errno = errno;
-            result = -1;
-            break;
-        }
-
-        void *payload = NULL;
-        if (result_len > 0) {
-            payload = malloc(result_len);
-            if (payload == NULL) {
-                saved_errno = errno;
-                free(token);
-                result = -1;
-                break;
-            }
-        }
-
-        n_read = readn(in_fd, token, token_len);
-        if (n_read != (ssize_t)token_len) {
-            saved_errno = n_read == -1 ? errno : EPROTO;
-            free(token);
-            free(payload);
-            result = -1;
-            break;
-        }
-
-        if (result_len > 0) {
-            n_read = readn(in_fd, payload, result_len);
-            if (n_read != (ssize_t)result_len) {
-                saved_errno = n_read == -1 ? errno : EPROTO;
-                free(token);
-                free(payload);
-                result = -1;
-                break;
-            }
-        }
-
-        if (writen(out_fd, &header, sizeof(header)) != (ssize_t)sizeof(header) ||
-            writen(out_fd, token, token_len) != (ssize_t)token_len ||
-            (result_len > 0 && writen(out_fd, payload, result_len) != (ssize_t)result_len)) {
-            saved_errno = errno;
-            free(token);
-            free(payload);
-            result = -1;
-            break;
-        }
-
-        if (results_written != NULL) { (*results_written)++; }
-
-        free(token);
-        free(payload);
-    }
-
-    if (close(out_fd) == -1 && result == 0) {
-        saved_errno = errno;
-        result = -1;
-    } else if (result == 0) {
-        log_message(log_fd, log_lock, "main", "main", "FILE_CLOSE", "output path=%s", output_path);
-    }
-
-    if (result == -1) { errno = saved_errno; }
-    return result;
-}
 static int write_line_record(int fd, const mr_line_item_t *item) {
     mr_line_header_t header;
 
-    if (item == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(item);
 
     if (item->file_name_len > INT_MAX || item->line_len > INT_MAX) {
         errno = EOVERFLOW;
@@ -644,13 +548,16 @@ static int write_line_record(int fd, const mr_line_item_t *item) {
     return 0;
 }
 
+/*
+ * Valori di ritorno:
+ * - 1: record di riga letto e ricostruito;
+ * - 0: EOF pulito;
+ * - -1: errore o record troncato/non valido.
+ */
 static int read_line_record(int fd, mr_line_item_t *out) {
     mr_line_header_t header;
 
-    if (out == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(out);
 
     ssize_t n_read = readn(fd, &header, sizeof(header));
 
@@ -699,10 +606,8 @@ static int read_line_record(int fd, mr_line_item_t *out) {
 
 static int write_file_lines(int out_fd, const char *path, const char *file_name, int log_fd, mtx_t *log_lock,
                             size_t *lines_sent) {
-    if (path == NULL || file_name == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(path);
+    MR_CHECK_NULL(file_name);
 
     log_message(log_fd, log_lock, "main", "main", "FILE_OPEN", "input path=%s", path);
     FILE *fp = fopen(path, "r");
@@ -780,10 +685,9 @@ static const char *input_path_basename(const char *path) {
 }
 
 static int build_full_path(const char *directory, const char *file_name, char **out) {
-    if (directory == NULL || file_name == NULL || out == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(directory);
+    MR_CHECK_NULL(file_name);
+    MR_CHECK_NULL(out);
 
     size_t directory_len = strlen(directory);
     size_t file_name_len = strlen(file_name);
@@ -809,10 +713,11 @@ static int build_full_path(const char *directory, const char *file_name, char **
 
 static int input_files_push(mr_input_file_t **files, size_t *count, size_t *capacity, const char *full_path,
                             const char *file_name) {
-    if (files == NULL || count == NULL || capacity == NULL || full_path == NULL || file_name == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(files);
+    MR_CHECK_NULL(count);
+    MR_CHECK_NULL(capacity);
+    MR_CHECK_NULL(full_path);
+    MR_CHECK_NULL(file_name);
 
     if (*count == *capacity) {
         size_t new_capacity = *capacity == 0 ? 8 : *capacity * 2;
@@ -920,10 +825,7 @@ static int write_directory_lines(int out_fd, const char *input_path, int log_fd,
 }
 
 static int write_input_path_lines(int out_fd, const char *input_path, int log_fd, mtx_t *log_lock, size_t *lines_sent) {
-    if (input_path == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(input_path);
     if (lines_sent != NULL) { *lines_sent = 0; }
 
     struct stat st;
@@ -938,6 +840,10 @@ static int write_input_path_lines(int out_fd, const char *input_path, int log_fd
     errno = EINVAL;
     return -1;
 }
+
+
+/* ==== mapper verso reducer (scrittura) ==== */
+
 static int is_valid_token(const char *token) {
     if (token == NULL || token[0] == '\0') { return 0; }
 
@@ -959,7 +865,8 @@ typedef struct {
     int out_fd;
     int log_fd;
     size_t pairs_produced;
-    mtx_t pipe_emit_lock; mtx_t log_lock;
+    mtx_t pipe_emit_lock;
+    mtx_t log_lock;
 } mr_mapper_context_t;
 
 typedef struct {
@@ -968,10 +875,7 @@ typedef struct {
 } mr_mapper_worker_arg_t;
 
 static int mapper_emit_pair(const char *token, const void *value, size_t value_size, void *emit_arg) {
-    if (emit_arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(emit_arg);
     mr_mapper_context_t *context = emit_arg;
 
     if (!is_valid_token(token) || (value_size > 0 && value == NULL)) {
@@ -1024,11 +928,11 @@ static int mapper_emit_pair(const char *token, const void *value, size_t value_s
     return 0;
 }
 
+
+/* ==== mapper ==== */
+
 static int mapper_reader_main(void *arg) {
-    if (arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(arg);
     mr_mapper_context_t *context = arg;
 
     log_message(context->log_fd, &context->log_lock, "mapper", "reader", "THREAD_START", "mapper reader started");
@@ -1065,10 +969,7 @@ static int mapper_reader_main(void *arg) {
 }
 
 static int mapper_worker_main(void *arg) {
-    if (arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(arg);
     mr_mapper_worker_arg_t *worker = arg;
     mr_mapper_context_t *context = worker->context;
     char thread_name[32];
@@ -1213,116 +1114,16 @@ static int mapper_process_main(mr_t mr, int log_fd) {
 
     return result;
 }
+
+
+/* ==== mapper verso reducer (lettura) ==== */
+
 typedef struct {
     char *token;
     size_t token_len;
     void *value;
     size_t value_len;
 } mr_pair_item_t;
-
-typedef struct {
-    char *token;
-    size_t token_len;
-    void *data;
-    size_t size;
-} mr_result_item_t;
-
-typedef struct {
-    mr_result_item_t *items;
-    size_t count;
-    size_t capacity;
-} mr_result_list_t;
-
-static void result_list_destroy(mr_result_list_t *list) {
-    if (list == NULL) { return; }
-
-    for (size_t i = 0; i < list->count; i++) {
-        free(list->items[i].token);
-        free(list->items[i].data);
-    }
-
-    free(list->items);
-    *list = (mr_result_list_t){ 0 };
-}
-
-static int result_list_push(mr_result_list_t *list, const char *token, const void *result, size_t result_size) {
-    if (list == NULL || !is_valid_token(token) || (result_size > 0 && result == NULL)) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    size_t token_len = strlen(token);
-    if (token_len > INT_MAX || result_size > INT_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-
-    if (list->count == list->capacity) {
-        size_t new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;
-
-        if (new_capacity < list->capacity || new_capacity > SIZE_MAX / sizeof(*list->items)) {
-            errno = ENOMEM;
-            return -1;
-        }
-
-        mr_result_item_t *new_items = realloc(list->items, new_capacity * sizeof(*new_items));
-        if (new_items == NULL) { return -1; }
-
-        list->items = new_items;
-        list->capacity = new_capacity;
-    }
-
-    char *token_copy = malloc(token_len);
-    if (token_copy == NULL) { return -1; }
-
-    void *data_copy = NULL;
-    if (result_size > 0) {
-        data_copy = malloc(result_size);
-        if (data_copy == NULL) {
-            int saved_errno = errno;
-            free(token_copy);
-            errno = saved_errno;
-            return -1;
-        }
-        memcpy(data_copy, result, result_size);
-    }
-
-    memcpy(token_copy, token, token_len);
-
-    mr_result_item_t *item = &list->items[list->count];
-    item->token = token_copy;
-    item->token_len = token_len;
-    item->data = data_copy;
-    item->size = result_size;
-    list->count++;
-
-    return 0;
-}
-
-static int reducer_collect_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
-    return result_list_push(emit_arg, token, result, result_size);
-}
-
-static int write_result_list(int fd, const mr_result_list_t *list) {
-    if (list == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    for (size_t i = 0; i < list->count; i++) {
-        const mr_result_item_t *item = &list->items[i];
-        mr_result_header_t header = {
-            .token_len = (int)item->token_len,
-            .result_len = (int)item->size,
-        };
-
-        if (writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) { return -1; }
-        if (writen(fd, item->token, item->token_len) != (ssize_t)item->token_len) { return -1; }
-        if (item->size > 0 && writen(fd, item->data, item->size) != (ssize_t)item->size) { return -1; }
-    }
-
-    return 0;
-}
 
 static void pair_item_destroy(mr_pair_item_t *item) {
     if (item == NULL) { return; }
@@ -1335,6 +1136,12 @@ static void pair_item_destroy(mr_pair_item_t *item) {
     return;
 }
 
+/*
+ * Valori di ritorno:
+ * - 1: coppia intermedia letta e ricostruita;
+ * - 0: EOF pulito;
+ * - -1: errore o record troncato/non valido.
+ */
 static int read_pair_record(int fd, mr_pair_item_t *item_out) {
     MR_CHECK_NULL(item_out);
     *item_out = (mr_pair_item_t){ 0 };
@@ -1395,6 +1202,210 @@ static int read_pair_record(int fd, mr_pair_item_t *item_out) {
 
     return 1;
 }
+
+/* ==== reducer verso main ==== */
+
+static int write_reducer_results(int in_fd, const char *output_path, int log_fd, mtx_t *log_lock,
+                                 size_t *results_written) {
+    MR_CHECK_NULL(output_path);
+    if (results_written != NULL) { *results_written = 0; }
+
+    log_message(log_fd, log_lock, "main", "main", "FILE_OPEN", "output path=%s", output_path);
+    int out_fd = open(output_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (out_fd == -1) { return -1; }
+
+    int result = 0;
+    int saved_errno = 0;
+
+    for (;;) {
+        mr_result_header_t header;
+        ssize_t n_read = readn(in_fd, &header, sizeof(header));
+
+        if (n_read == 0) { break; }
+        if (n_read == -1) {
+            saved_errno = errno;
+            result = -1;
+            break;
+        }
+
+        if (header.token_len <= 0 || header.result_len < 0) {
+            saved_errno = EPROTO;
+            result = -1;
+            break;
+        }
+
+        size_t token_len = (size_t)header.token_len;
+        size_t result_len = (size_t)header.result_len;
+
+        char *token = malloc(token_len);
+        if (token == NULL) {
+            saved_errno = errno;
+            result = -1;
+            break;
+        }
+
+        void *payload = NULL;
+        if (result_len > 0) {
+            payload = malloc(result_len);
+            if (payload == NULL) {
+                saved_errno = errno;
+                free(token);
+                result = -1;
+                break;
+            }
+        }
+
+        n_read = readn(in_fd, token, token_len);
+        if (n_read != (ssize_t)token_len) {
+            saved_errno = n_read == -1 ? errno : EPROTO;
+            free(token);
+            free(payload);
+            result = -1;
+            break;
+        }
+
+        if (result_len > 0) {
+            n_read = readn(in_fd, payload, result_len);
+            if (n_read != (ssize_t)result_len) {
+                saved_errno = n_read == -1 ? errno : EPROTO;
+                free(token);
+                free(payload);
+                result = -1;
+                break;
+            }
+        }
+
+        if (writen(out_fd, &header, sizeof(header)) != (ssize_t)sizeof(header) ||
+            writen(out_fd, token, token_len) != (ssize_t)token_len ||
+            (result_len > 0 && writen(out_fd, payload, result_len) != (ssize_t)result_len)) {
+            saved_errno = errno;
+            free(token);
+            free(payload);
+            result = -1;
+            break;
+        }
+
+        if (results_written != NULL) { (*results_written)++; }
+
+        free(token);
+        free(payload);
+    }
+
+    if (close(out_fd) == -1 && result == 0) {
+        saved_errno = errno;
+        result = -1;
+    } else if (result == 0) {
+        log_message(log_fd, log_lock, "main", "main", "FILE_CLOSE", "output path=%s", output_path);
+    }
+
+    if (result == -1) { errno = saved_errno; }
+    return result;
+}
+
+
+typedef struct {
+    char *token;
+    size_t token_len;
+    void *data;
+    size_t size;
+} mr_result_item_t;
+
+typedef struct {
+    mr_result_item_t *items;
+    size_t count;
+    size_t capacity;
+} mr_result_list_t;
+
+static void result_list_destroy(mr_result_list_t *list) {
+    if (list == NULL) { return; }
+
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->items[i].token);
+        free(list->items[i].data);
+    }
+
+    free(list->items);
+    *list = (mr_result_list_t){ 0 };
+}
+
+static int result_list_push(mr_result_list_t *list, const char *token, const void *result, size_t result_size) {
+    MR_CHECK_NULL(list);
+    if (!is_valid_token(token) || (result_size > 0 && result == NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t token_len = strlen(token);
+    if (token_len > INT_MAX || result_size > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    if (list->count == list->capacity) {
+        size_t new_capacity = list->capacity == 0 ? 4 : list->capacity * 2;
+
+        if (new_capacity < list->capacity || new_capacity > SIZE_MAX / sizeof(*list->items)) {
+            errno = ENOMEM;
+            return -1;
+        }
+
+        mr_result_item_t *new_items = realloc(list->items, new_capacity * sizeof(*new_items));
+        if (new_items == NULL) { return -1; }
+
+        list->items = new_items;
+        list->capacity = new_capacity;
+    }
+
+    char *token_copy = malloc(token_len);
+    if (token_copy == NULL) { return -1; }
+
+    void *data_copy = NULL;
+    if (result_size > 0) {
+        data_copy = malloc(result_size);
+        if (data_copy == NULL) {
+            int saved_errno = errno;
+            free(token_copy);
+            errno = saved_errno;
+            return -1;
+        }
+        memcpy(data_copy, result, result_size);
+    }
+
+    memcpy(token_copy, token, token_len);
+
+    mr_result_item_t *item = &list->items[list->count];
+    item->token = token_copy;
+    item->token_len = token_len;
+    item->data = data_copy;
+    item->size = result_size;
+    list->count++;
+
+    return 0;
+}
+
+static int reducer_collect_result(const char *token, const void *result, size_t result_size, void *emit_arg) {
+    return result_list_push(emit_arg, token, result, result_size);
+}
+
+static int write_result_list(int fd, const mr_result_list_t *list) {
+    MR_CHECK_NULL(list);
+
+    for (size_t i = 0; i < list->count; i++) {
+        const mr_result_item_t *item = &list->items[i];
+        mr_result_header_t header = {
+            .token_len = (int)item->token_len,
+            .result_len = (int)item->size,
+        };
+
+        if (writen(fd, &header, sizeof(header)) != (ssize_t)sizeof(header)) { return -1; }
+        if (writen(fd, item->token, item->token_len) != (ssize_t)item->token_len) { return -1; }
+        if (item->size > 0 && writen(fd, item->data, item->size) != (ssize_t)item->size) { return -1; }
+    }
+
+    return 0;
+}
+
+/* ==== reducer ==== */
 
 typedef struct {
     char *token;
@@ -1497,7 +1508,9 @@ static mr_pair_group_t *pair_groups_push_group(mr_pair_groups_t *groups, mr_pair
 }
 
 static int pair_group_add_value(mr_pair_group_t *group, mr_pair_item_t *item) {
-    if (group == NULL || item == NULL || (item->value_len > 0 && item->value == NULL)) {
+    MR_CHECK_NULL(group);
+    MR_CHECK_NULL(item);
+    if (item->value_len > 0 && item->value == NULL) {
         errno = EINVAL;
         return -1;
     }
@@ -1529,8 +1542,9 @@ static int pair_group_add_value(mr_pair_group_t *group, mr_pair_item_t *item) {
 }
 
 static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair) {
-    if (groups == NULL || pair == NULL || pair->token == NULL || pair->token_len == 0 ||
-        (pair->value_len > 0 && pair->value == NULL)) {
+    MR_CHECK_NULL(groups);
+    MR_CHECK_NULL(pair);
+    if (pair->token == NULL || pair->token_len == 0 || (pair->value_len > 0 && pair->value == NULL)) {
         errno = EINVAL;
         return -1;
     }
@@ -1564,10 +1578,7 @@ static int pair_groups_add_pair(mr_pair_groups_t *groups, mr_pair_item_t *pair) 
 }
 
 static int collect_pair_groups(int fd, mr_pair_groups_t *groups) {
-    if (groups == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(groups);
 
     for (;;) {
         mr_pair_item_t pair = { 0 };
@@ -1606,10 +1617,7 @@ typedef struct {
 } mr_reducer_worker_arg_t;
 
 static int reducer_worker_main(void *arg) {
-    if (arg == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
+    MR_CHECK_NULL(arg);
     mr_reducer_worker_arg_t *worker = arg;
     mr_reducer_worker_context_t *context = worker->context;
     char thread_name[32];
@@ -1791,6 +1799,9 @@ static int reducer_process_main(mr_t mr, int log_fd) {
     if (result == -1) { errno = saved_errno; }
     return result;
 }
+
+
+/* ==== main ==== */
 
 int mr_start(mr_t mr, const char *input_path, const char *output_path) {
     MR_CHECK_NULL(mr);
