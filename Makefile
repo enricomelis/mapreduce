@@ -15,10 +15,11 @@ TEST_ATTR = $(BUILD_DIR)/test_attr
 TEST_LIFECYCLE = $(BUILD_DIR)/test_lifecycle
 TEST_START = $(BUILD_DIR)/test_start
 TEST_IO = $(BUILD_DIR)/test_io
+EXAMPLE_WORD_COUNT = $(BUILD_DIR)/word_count
 
 .PHONY: all test clean
 
-all: $(LIB_NAME)
+all: $(LIB_NAME) $(EXAMPLE_WORD_COUNT)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -47,5 +48,8 @@ $(TEST_START): $(TEST_DIR)/test_start.c $(LIB_NAME) | $(BUILD_DIR)
 $(TEST_IO): $(TEST_DIR)/test_io.c $(SRC_DIR)/mr.c include/mr.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
 
+$(EXAMPLE_WORD_COUNT): examples/word_count.c $(LIB_NAME) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
+
 clean:
-	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO)
+	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO) $(EXAMPLE_WORD_COUNT) output.mro
