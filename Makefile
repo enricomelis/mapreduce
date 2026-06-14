@@ -17,9 +17,11 @@ TEST_GENERIC_E2E = $(BUILD_DIR)/test_generic_e2e
 TEST_DIRECTORY_CONCURRENCY_LOG = $(BUILD_DIR)/test_directory_concurrency_log
 EXAMPLE_WORD_COUNT = $(BUILD_DIR)/word_count
 
-.PHONY: all test clean
+.PHONY: all example test clean
 
-all: $(LIB_NAME) $(EXAMPLE_WORD_COUNT)
+all: $(LIB_NAME)
+
+example: $(EXAMPLE_WORD_COUNT)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
