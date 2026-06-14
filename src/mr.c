@@ -515,7 +515,6 @@ int mr_destroy(mr_t mr) {
     return 0;
 }
 
-
 /* ==== main verso mapper ==== */
 
 static int write_line_record(int fd, const mr_line_item_t *item) {
@@ -841,7 +840,6 @@ static int write_input_path_lines(int out_fd, const char *input_path, int log_fd
     return -1;
 }
 
-
 /* ==== mapper verso reducer (scrittura) ==== */
 
 static int is_valid_token(const char *token) {
@@ -927,7 +925,6 @@ static int mapper_emit_pair(const char *token, const void *value, size_t value_s
 
     return 0;
 }
-
 
 /* ==== mapper ==== */
 
@@ -1115,7 +1112,6 @@ static int mapper_process_main(mr_t mr, int log_fd) {
     return result;
 }
 
-
 /* ==== mapper verso reducer (lettura) ==== */
 
 typedef struct {
@@ -1301,7 +1297,6 @@ static int write_reducer_results(int in_fd, const char *output_path, int log_fd,
     if (result == -1) { errno = saved_errno; }
     return result;
 }
-
 
 typedef struct {
     char *token;
@@ -1799,7 +1794,6 @@ static int reducer_process_main(mr_t mr, int log_fd) {
     if (result == -1) { errno = saved_errno; }
     return result;
 }
-
 
 /* ==== main ==== */
 
