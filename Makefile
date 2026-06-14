@@ -11,6 +11,7 @@ TEST_DIR  = tests
 
 LIB_SRCS = $(wildcard $(SRC_DIR)/*.c)
 LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
+PRIVATE_HDRS = $(wildcard $(SRC_DIR)/*.h)
 TEST_ATTR = $(BUILD_DIR)/test_attr
 TEST_LIFECYCLE = $(BUILD_DIR)/test_lifecycle
 TEST_START = $(BUILD_DIR)/test_start
@@ -24,10 +25,11 @@ all: $(LIB_NAME) $(EXAMPLE_WORD_COUNT)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(PRIVATE_HDRS) include/mr.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(LIB_NAME): $(LIB_OBJS)
+	rm -f $@
 	$(AR) $(ARFLAGS) $@ $^
 
 test: $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO)
@@ -45,11 +47,11 @@ $(TEST_LIFECYCLE): $(TEST_DIR)/test_lifecycle.c $(LIB_NAME) | $(BUILD_DIR)
 $(TEST_START): $(TEST_DIR)/test_start.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
-$(TEST_IO): $(TEST_DIR)/test_io.c $(SRC_DIR)/mr.c include/mr.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+$(TEST_IO): $(TEST_DIR)/test_io.c $(LIB_NAME) include/mr.h $(PRIVATE_HDRS) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
 $(EXAMPLE_WORD_COUNT): examples/word_count.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
 clean:
-	rm -f $(LIB_NAME) $(LIB_OBJS) $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO) $(EXAMPLE_WORD_COUNT) output.mro
+	rm -f $(LIB_NAME) $(BUILD_DIR)/*.o $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO) $(EXAMPLE_WORD_COUNT) output.mro

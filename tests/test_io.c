@@ -7,7 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "../src/mr.c"
+#include "../src/mr_internal.h"
 
 static int expect_int(int condition, const char *message) {
     if (!condition) {
