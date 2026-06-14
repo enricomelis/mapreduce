@@ -12,10 +12,9 @@ TEST_DIR  = tests
 LIB_SRCS = $(wildcard $(SRC_DIR)/*.c)
 LIB_OBJS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(LIB_SRCS))
 PRIVATE_HDRS = $(wildcard $(SRC_DIR)/*.h)
-TEST_ATTR = $(BUILD_DIR)/test_attr
-TEST_LIFECYCLE = $(BUILD_DIR)/test_lifecycle
-TEST_START = $(BUILD_DIR)/test_start
-TEST_IO = $(BUILD_DIR)/test_io
+TEST_ATTR_LIFECYCLE = $(BUILD_DIR)/test_attr_lifecycle
+TEST_GENERIC_E2E = $(BUILD_DIR)/test_generic_e2e
+TEST_DIRECTORY_CONCURRENCY_LOG = $(BUILD_DIR)/test_directory_concurrency_log
 EXAMPLE_WORD_COUNT = $(BUILD_DIR)/word_count
 
 .PHONY: all test clean
@@ -32,26 +31,22 @@ $(LIB_NAME): $(LIB_OBJS)
 	rm -f $@
 	$(AR) $(ARFLAGS) $@ $^
 
-test: $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO)
-	./$(TEST_ATTR)
-	./$(TEST_LIFECYCLE)
-	./$(TEST_START)
-	./$(TEST_IO)
+test: $(TEST_ATTR_LIFECYCLE) $(TEST_GENERIC_E2E) $(TEST_DIRECTORY_CONCURRENCY_LOG)
+	./$(TEST_ATTR_LIFECYCLE)
+	./$(TEST_GENERIC_E2E)
+	./$(TEST_DIRECTORY_CONCURRENCY_LOG)
 
-$(TEST_ATTR): $(TEST_DIR)/test_attr.c $(LIB_NAME) | $(BUILD_DIR)
+$(TEST_ATTR_LIFECYCLE): $(TEST_DIR)/test_attr_lifecycle.c $(LIB_NAME) include/mr.h $(PRIVATE_HDRS) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
-$(TEST_LIFECYCLE): $(TEST_DIR)/test_lifecycle.c $(LIB_NAME) | $(BUILD_DIR)
+$(TEST_GENERIC_E2E): $(TEST_DIR)/test_generic_e2e.c $(LIB_NAME) include/mr.h $(PRIVATE_HDRS) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
-$(TEST_START): $(TEST_DIR)/test_start.c $(LIB_NAME) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
-
-$(TEST_IO): $(TEST_DIR)/test_io.c $(LIB_NAME) include/mr.h $(PRIVATE_HDRS) | $(BUILD_DIR)
+$(TEST_DIRECTORY_CONCURRENCY_LOG): $(TEST_DIR)/test_directory_concurrency_log.c $(LIB_NAME) include/mr.h $(PRIVATE_HDRS) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
 $(EXAMPLE_WORD_COUNT): examples/word_count.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
 clean:
-	rm -f $(LIB_NAME) $(BUILD_DIR)/*.o $(TEST_ATTR) $(TEST_LIFECYCLE) $(TEST_START) $(TEST_IO) $(EXAMPLE_WORD_COUNT) output.mro
+	rm -f $(LIB_NAME) $(BUILD_DIR)/*.o $(TEST_ATTR_LIFECYCLE) $(TEST_GENERIC_E2E) $(TEST_DIRECTORY_CONCURRENCY_LOG) $(EXAMPLE_WORD_COUNT) output.mro

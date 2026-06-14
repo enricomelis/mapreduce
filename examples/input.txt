@@ -1,6 +1,4 @@
-MapReduce counts words.
-MapReduce splits lines, maps words, and reduces counts.
+Esempio di utilizzo del framework per il word count.
 
-Words repeat: words repeat repeat.
-Numbers like 2025 and 2025 are tokens too.
-Case matters: Word word WORD.
+framework Framework
+Esempio esempio 2026 Laboratorio2
