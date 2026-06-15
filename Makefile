@@ -17,11 +17,9 @@ TEST_GENERIC_E2E = $(BUILD_DIR)/test_generic_e2e
 TEST_DIRECTORY_CONCURRENCY_LOG = $(BUILD_DIR)/test_directory_concurrency_log
 EXAMPLE_WORD_COUNT = $(BUILD_DIR)/word_count
 
-.PHONY: all example test clean
+.PHONY: all test clean
 
-all: $(LIB_NAME)
-
-example: $(EXAMPLE_WORD_COUNT)
+all: $(LIB_NAME) $(EXAMPLE_WORD_COUNT)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -51,4 +49,4 @@ $(EXAMPLE_WORD_COUNT): examples/word_count.c $(LIB_NAME) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB_NAME) -o $@
 
 clean:
-	rm -f $(LIB_NAME) $(BUILD_DIR)/*.o $(TEST_ATTR_LIFECYCLE) $(TEST_GENERIC_E2E) $(TEST_DIRECTORY_CONCURRENCY_LOG) $(EXAMPLE_WORD_COUNT) output.mro
+	rm -f $(LIB_NAME) $(BUILD_DIR)/*.o $(TEST_ATTR_LIFECYCLE) $(TEST_GENERIC_E2E) $(TEST_DIRECTORY_CONCURRENCY_LOG) $(EXAMPLE_WORD_COUNT) output.mro mr.log
