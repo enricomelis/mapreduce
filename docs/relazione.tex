@@ -1,0 +1,351 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[italian]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\geometry{margin=2.5cm}
+
+\title{Relazione progetto MapReduce}
+\author{Enrico Melis - 693626}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\newpage
+\section{Introduzione}
+
+La maggior parte della relazione si trova in questo documento, i commenti all'interno del codice sono minimali e spesso limitati alla descrizione delle convenzioni per i valori di ritorno.
+
+\section{Architettura generale del framework}
+
+Il framework è una libreria C esposta grazie all'header \texttt{mr.h}. Si occupa di tutta la gestione della computazione, dalla lettura dell'input alla scrittura dell'output passando per la gestione dei processi, dei dati grezzi e della comunicazione fra processi.
+
+L'utente fornisce le due funzioni chiave: la \texttt{mapper} e la \texttt{reducer} che vengono usate dal framework per svolgere la computazione richiesta secondo il flusso di dati orchestrato dal framework.
+
+Il flusso avviene tramite tre processi: il main, il mapper e il reducer che comunicano con tre pipe secondo il seguente ordine:
+
+\begin{verbatim}
+file input
+  -> processo principale
+  -> pipe righe
+  -> processo mapper
+  -> pipe coppie <token, valore>
+  -> processo reducer
+  -> pipe risultati
+  -> processo principale
+  -> file output
+\end{verbatim}
+
+I due processi figli sono multithread e il numero dei thread fa parte degli attributi impostabili dall'utente.
+
+\section{Interfaccia pubblica}
+
+L'interfaccia pubblica è quella parte del framework esposta all'utente e comprende:
+
+\begin{itemize}
+    \item \texttt{mr\_t}: Handle opaco per una computazione. Contiene gli attributi, le due callback e un puntatore ad eventuali argomenti forniti dall'utente.
+
+    \item \texttt{mr\_attr\_t}: Collezione di attributi necessari per la computazione. Contiene il numero di worker threads per i processi, la grandezza della coda e il nome del file di log.
+
+    \item \texttt{mr\_file\_line\_t}: Descrittore logico di una riga del file input.
+
+    \item \texttt{mr\_value\_t}: Descrittore logico di un valore, collezionato come coppia di dati grezzi e grandezza.
+
+    \item \texttt{mr\_emit\_pair\_t}: Firma per la funzione di emissione delle coppie \texttt{<token, value>}.
+
+    \item \texttt{mr\_emit\_result\_t}: Firma per la funzione di emissione delle coppie \texttt{<token, result>}.
+
+    \item \texttt{mr\_mapper\_t}: Firma per la callback mapper.
+
+    \item \texttt{mr\_reducer\_t}: Firma per la callback reducer.
+
+    \item \texttt{mr\_attr\_init}: Inizializzatore della memoria degli attributi.
+
+    \item \texttt{mr\_attr\_destroy}: Distruttore della memoria degli attributi.
+
+    \item \texttt{mr\_attr\_set\_mapper\_threads}: Setter per il numero di thread worker del processo mapper.
+
+    \item \texttt{mr\_attr\_set\_reducer\_threads}: Setter per il numero di thread worker del processo reducer.
+
+    \item \texttt{mr\_attr\_set\_queue\_size}: Setter per il numero di slot nella coda ad anello del processo mapper.
+
+    \item \texttt{mr\_attr\_set\_log\_file}: Setter per il file di log.
+
+    \item \texttt{mr\_create}: Funzione per istanziare la computazione.
+
+    \item \texttt{mr\_start}: Funzione per iniziare la computazione.
+
+    \item \texttt{mr\_destroy}: Distruttore della memoria dell'handle.
+\end{itemize}
+
+L'interfaccia separa la logica applicativa dalla gestione concorrente: il programma utente fornisce callback e parametri, mentre il framework si occupa dell'esecuzione, della comunicazione tra processi e della produzione dell'output.
+
+\section{Organizzazione dei processi}
+
+I processi sono organizzati in una pipeline UNIX a tre stadi. Dal processo main si mandano dati al processo mapper, che li manda al processo reducer, che manda i risultati al processo main (che li scrive sul file in output).
+
+Tutti i processi comunicano tramite pipe. Non vengono usati segnali speciali, alla fine del lavoro vengono chiusi i descrittori e viene propagato l'EOF per passare al prossimo stadio di computazione.
+
+\begin{itemize}
+    \item La pipe \texttt{main->mapper} trasmette le righe serializzate dopo che sono state lette in input.
+    \item La pipe \texttt{mapper->reducer} trasmette le coppie \texttt{<token, valore>}.
+    \item La pipe \texttt{reducer->main} trasmette i risultati finali.
+\end{itemize}
+
+I processi figli vengono creati con \texttt{fork()} e la redirezione avviene tramite \texttt{dup2()} per collegare gli standard input/output ai lati corretti delle pipe. Il processo main è ovviamente incaricato di fare \texttt{waitpid()} per i figli.
+
+Di seguito i ruoli dei singoli processi:
+
+\begin{itemize}
+    \item Main: \texttt{mr\_start()} coordina la computazione; \texttt{write\_input\_path\_lines()} legge il path di input e invia le righe; \texttt{write\_reducer\_results()} legge i risultati dalla pipe e produce il file di output.
+    \item Mapper: \texttt{mapper\_process\_main()} inizializza la coda interna, crea il thread reader e i worker thread, applicando la callback mapper alle righe ricevute.
+    \item Reducer: \texttt{reducer\_process\_main()} raccoglie tutte le coppie prodotte dal mapper, le raggruppa per token, crea i worker thread reducer e scrive i risultati finali verso il main.
+\end{itemize}
+
+\newpage
+\section{Organizzazione dei thread}
+
+I thread dei processi sono tutti gestiti tramite la libreria \texttt{<threads.h>}, insieme a lock \texttt{mtx\_t} e condition variables \texttt{cnd\_t}.
+
+Ogni processo nasce con un thread iniziale di esecuzione. Nel processo principale questo thread coordina la pipeline, invia le righe al mapper, raccoglie i risultati e attende i figli. Nei processi mapper e reducer il thread iniziale si occupa di creare e attendere i thread di lavoro necessari alla computazione.
+
+\subsection{Thread del mapper}
+
+Il mapper ha:
+
+\begin{itemize}
+    \item un thread reader (esplicito) che si occupa di leggere le righe serializzate e aggiungerle alla coda;
+    \item \texttt{mr->attr.mapper\_threads} thread per l'elaborazione della callback mapper.
+\end{itemize}
+
+\subsection{Thread del reducer}
+
+Il reducer usa il proprio thread iniziale per leggere le coppie e raggrupparle in base ai token. Dopo il raggruppamento vengono creati:
+
+\begin{itemize}
+    \item \texttt{mr->attr.reducer\_threads} thread per l'elaborazione della callback reducer.
+\end{itemize}
+
+\subsection{Altri thread}
+
+Oltre ai thread principali, all'interno del processo main vengono creati anche dei thread per la gestione dei log, che vengono approfonditi nella sezione dedicata.
+
+\section{Code interne e sincronizzazione}
+
+Il framework utilizza una coda circolare per la separazione del thread reader dai thread worker nel processo mapper. È descritta dalla struct \texttt{mr\_line\_queue\_t} ed è dotata delle sue funzioni per la gestione interna.
+
+È ottimizzata per il pattern producer-consumer con due condition variables dedicate e un lock per la sincronizzazione. Grazie alla natura bounded, FIFO circolare (con push e pop efficienti), bloccante e chiudibile è ottima per questo framework.
+
+\begin{lstlisting}[language=C]
+typedef struct {
+    mr_line_item_t *items;
+    size_t capacity;
+    size_t head;
+    size_t tail;
+    size_t count;
+    int closed;
+    mtx_t lock;
+    cnd_t not_empty;
+    cnd_t not_full;
+} mr_line_queue_t;
+\end{lstlisting}
+
+\newpage
+\section{Protocollo sulle pipe}
+
+La struttura delle pipe è già descritta nella sezione dei processi; qui vengono discussi i protocolli di serializzazione per una comunicazione sicura e robusta.
+
+Dato che non possiamo trasmettere i puntatori ai dati direttamente (i processi hanno spazi di indirizzamento diversi), ogni messaggio è composto da un header che precede la trasmissione dei byte effettivi.
+
+Le letture e le scritture utilizzano due funzioni helper fondamentali per la robustezza: \texttt{readn()} e \texttt{writen()}. Queste due funzioni si assicurano che il numero di byte letti/scritti sia quello che ci aspettiamo.
+
+\begin{itemize}
+    \item La prima pipe comunica un header che contiene la lunghezza del nome del file, il numero di riga e la lunghezza della riga, prima di comunicare il nome del file e la riga (come byte grezzi).
+
+    \item La seconda pipe comunica un header che contiene la lunghezza del token e la lunghezza del valore, prima di comunicare il token (stringa C) e il valore (come byte grezzi).
+
+    \item La terza pipe comunica un header che contiene la lunghezza del token e la lunghezza del risultato, prima di comunicare il token (stringa C) e il risultato (come byte grezzi). Concettualmente è la stessa struttura usata nella seconda pipe, ma per chiarezza ne è stata creata una seconda versione.
+\end{itemize}
+
+\subsection{Gestione dell'ownership}
+
+Dato che i puntatori non possono essere trasmessi, è importante definire chi possiede i vari dati durante la pipeline della computazione.
+
+Per ogni trasferimento il mittente mantiene la proprietà sui propri buffer, liberabili dopo la scrittura riuscita. Il destinatario deve invece allocare nuovi buffer per acquisire i dati ricevuti, mantenendo poi la responsabilità della loro liberazione.
+
+Questo passaggio è visibile nella lettura delle righe: \texttt{read\_line\_record()} alloca nuovi buffer per \texttt{file\_name} e \texttt{line}, che poi vengono liberati con \texttt{line\_item\_destroy()} dopo l'elaborazione del mapper.
+
+Lo stesso principio vale per le coppie intermedie. \texttt{read\_pair\_record()} alloca token e valore nel processo reducer; durante il raggruppamento, \texttt{pair\_groups\_add\_pair()} trasferisce questi buffer dentro la struttura dei gruppi. Alla fine della computazione, \texttt{pair\_groups\_destroy()} e \texttt{pair\_group\_destroy()} liberano token, valori e risultati collegati ai gruppi.
+
+Così facendo, ogni processo gestisce la propria memoria all'interno del rispettivo spazio di indirizzamento, trasferendo non i puntatori ma il contenuto dei dati lungo la pipeline.
+
+\newpage
+\section{Raggruppamento per token}
+
+Il raggruppamento per token funziona grazie a una serie di struct che permettono di collegare un token alla lista dei suoi valori e al suoi risultati, per unificare l'elemento e facilitare la gestione della memoria.
+
+La struttura dei gruppi contiene un array di elementi, insieme a un contatore di entry valide e una capacità massima incrementabile tramite \texttt{realloc}.
+
+\begin{lstlisting}[language=C]
+typedef struct {
+    mr_pair_group_t *items;
+    size_t count;
+    size_t capacity;
+} mr_pair_groups_t;
+\end{lstlisting}
+
+Ogni gruppo contiene il token con la sua lunghezza, un array di valori con rispettivi contatori e capacità, e un array di risultati (gestito nella stessa maniera, ogni entry è una coppia \texttt{<token, data>} con rispettive lunghezze).
+
+\begin{lstlisting}[language=C]
+typedef struct {
+    char *token;
+    size_t token_len;
+    mr_value_t *values;
+    size_t values_count;
+    size_t values_capacity;
+    mr_result_list_t results;
+} mr_pair_group_t;
+\end{lstlisting}
+
+Nel processo reducer il raggruppamento avviene prima dell'avvio dei worker thread reducer. Il reducer legge dalla pipe tutte le coppie prodotte dal mapper; per ogni coppia cerca se esiste già un gruppo con lo stesso token (\texttt{pair\_groups\_find()}). Se il gruppo esiste, il valore viene aggiunto all'array dei valori di quel gruppo (\texttt{pair\_group\_add\_value()}). Se il gruppo non esiste, viene creata una nuova entry in \texttt{mr\_pair\_groups\_t} e il valore viene inserito nel nuovo gruppo (\texttt{pair\_groups\_push\_group()}).
+
+Quando la pipe mapper-reducer raggiunge EOF, il reducer sa che non arriveranno altre coppie e quindi il raggruppamento è completo. A quel punto i gruppi vengono ordinati lessicograficamente per token, così l'output finale rimane deterministico. Solo dopo questo passaggio vengono creati i worker thread reducer, che ricevono i gruppi da elaborare e invocano la callback reducer una sola volta per ogni token distinto.
+
+\section{Formato del file di output}
+
+Il file in output ha formato binario e viene prodotto dal processo principale dopo aver letto i risultati dalla terza pipe con \texttt{write\_reducer\_results()}.
+
+Non è altro che una lista di entry con la seguente struttura:
+
+\begin{verbatim}
+[token_len][result_len][token bytes][result bytes]
+[token_len][result_len][token bytes][result bytes]
+...
+\end{verbatim}
+
+Il determinismo del risultato è garantito dall'ordinamento lessicografico effettuato dopo il raggruppamento (prima di chiamare la callback reducer). L'emissione di più risultati non crea problemi: l'ordine è definito dalla callback reducer, quindi non cambia fra le varie esecuzioni e non è responsabilità del framework.
+
+Il risultato è sempre trattato come dato opaco, il framework non lo interpreta.
+
+\section{Sistema di log}
+
+Il sistema di log serve a tracciare gli eventi principali della computazione, mantenendo separata la diagnostica dal protocollo usato sulle pipe standard. Questo è importante perché nei processi mapper e reducer lo standard output è riservato alla comunicazione interna del framework.
+
+Il file di log è configurabile tramite \texttt{mr\_attr\_set\_log\_file()}. Se l'utente non specifica un file, viene usato un nome di default (\texttt{mr.log}).
+
+Come specificato dal contratto del progetto, ogni riga di log contiene un timestamp, processo, pid, thread, tipo di evento e messaggio:
+
+\begin{verbatim}
+[timestamp] [processo:pid] [thread] [evento] messaggio
+\end{verbatim}
+
+Gli eventi registrati includono la creazione delle pipe, la creazione dei processi figli, l'apertura e chiusura dei file, avvio e terminazione dei thread, conteggi finali ed eventuali errori.
+
+La gestione dei log è centralizzata nel processo main. Il main scrive direttamente sul file di log, mentre i processi mapper e reducer scrivono su pipe dedicate. Nel processo main vengono creati due thread collector, uno per il mapper e uno per il reducer, che leggono da queste pipe e riportano i messaggi nel file di log.
+
+La scrittura sul file di log è protetta da un lock, così da evitare interferenze fra il thread principale e i thread collector. Nei processi figli è presente un lock locale per sincronizzare le scritture prodotte dai diversi thread dello stesso processo.
+
+\section{Esempio applicativo: word count}
+
+Come esempio di applicazione è stato scelto un classico contatore di parole. Nel file \texttt{examples/word\_count.c} viene definito:
+
+\begin{itemize}
+    \item callback mapper: data una riga, viene cercato un token ed eventualmente emesso in coppia col valore 1 (intero);
+    \item callback reducer: dato il token e i suoi valori, vengono accumulati nel risultato (somma) ed emessi;
+    \item funzione di run: per inizializzare, eseguire e controllare l'esecuzione;
+    \item main: per controllare la validità degli input ed eseguire la funzione di run.
+\end{itemize}
+
+Per lanciarlo basta eseguire nel terminale:
+
+\begin{itemize}
+    \item \texttt{make example} per compilare il framework e l'esempio;
+    \item \texttt{./build/word\_count examples/input.txt examples/output.mro examples/word\_count.log} per eseguire.
+\end{itemize}
+
+\section{Test automatici}
+
+I test automatici sono stati scritti per verificare sia il contratto pubblico del framework sia il comportamento end-to-end della pipeline. Lo scopo generale è controllare che la libreria sia usabile da un programma esterno tramite \texttt{mr.h}, che gestisca correttamente input, output e callback, e che il risultato non dipenda dall'ordine di scheduling dei thread.
+
+Durante lo sviluppo sono stati scritti dei piccoli test per verificare aspetti più granulari del framework, ma sono stati sostituiti dai tre presenti nella consegna, che sono stati scritti a progetto finito per gli ultimi aggiustamenti.
+
+\subsection{Test su attributi e ciclo di vita}
+
+Questo gruppo di test verifica la gestione degli attributi e dell'handle principale della computazione. Vengono controllati i valori di default, i setter degli attributi, il rifiuto di parametri non validi e la corretta impostazione di \texttt{errno}. Inoltre viene verificato il ciclo di vita dell'oggetto \texttt{mr\_t}: creazione con callback valide, salvataggio di mapper, reducer e \texttt{user\_arg}, distruzione finale e gestione dei casi di errore.
+
+\subsection{Test end-to-end generico}
+
+Il test end-to-end generico verifica l'intera pipeline su un singolo file di input. Usa mapper e reducer artificiali, diversi dal word count, per controllare che il framework non dipenda da una logica applicativa specifica. In particolare verifica che valori binari opachi, valori di lunghezza zero, raggruppamento per token e formato binario dell'output vengano gestiti correttamente. Il test controlla anche che i risultati siano scritti nell'ordine atteso e che non vengano prodotti record extra.
+
+\subsection{Test su directory, concorrenza e log}
+
+Questo test verifica l'elaborazione di una directory contenente più file, con più thread mapper e reducer e una coda interna di dimensione ridotta. In questo modo viene esercitata la sincronizzazione tra reader e worker e viene controllato che l'output resti deterministico anche in presenza di concorrenza. Il test verifica anche che il log venga prodotto e che contenga eventi significativi come creazione delle pipe, creazione dei processi, avvio dei thread e conteggi finali.
+
+\section{Utilizzo di coding agents nel progetto}
+
+Anche se non è specificato, credo necessario spendere un paragrafo per descrivere l'utilizzo di strumenti automatici di supporto alla programmazione, che come puntualizzato nel testo ``non solleva lo studente dalla responsabilità di comprendere, verificare e saper spiegare il codice consegnato''.
+
+Nota: questa relazione è stata scritta senza l'utilizzo di tali strumenti.
+
+Durante lo sviluppo è stato utilizzato il modello \texttt{gpt-5.5} con ragionamento ``Alto'' all'interno dell'applicazione desktop ``Codex''.
+
+Per garantire un comportamento consono da parte del modello, è stato fornito il seguente file \texttt{AGENTS.md} e una versione in markdown del testo originale del progetto.
+
+\begin{verbatim}
+# AGENTS.md
+
+SEI IN MODALITÀ GUIDA: non scrivere codice in autonomia. Dai per scontato di
+non dover scrivere codice ma di dover aiutare il programmatore a comprendere
+al massimo e sviluppare competenze in C.
+
+## Regole non negoziabili
+
+- NON generare mai codice in autonomia. Genera codice solo su richiesta
+  esplicita del programmatore.
+- Prima di generare codice, assicurati con domande mirate la comprensione di ciò che
+  sta venendo implementato.
+- Lo scopo di questo progetto è imparare la programmazione C in un contesto più
+  avanzato della semplice applicazione dei concetti.
+- Non aggiungere commenti al codice in autonomia. I commenti vengono aggiunti
+  dal programmatore.
+
+## Ambiente
+
+- Il testo del progetto si trova dentro `docs/Testo.md`, quella è la fonte di
+  verità in qualsiasi contesto. Solo progetto base, niente addendum.
+- Il progetto viene sviluppato all'interno di un dev container che simula una
+  macchina con Ubuntu 24.04, cioè il sistema in cui verrà eseguito il codice
+  prodotto alla fine.
+- Le best practices dello sviluppo UNIX sono favorite, soprattutto la modularità
+  delle funzioni.
+\end{verbatim}
+
+Come si può intuire dal system prompt, l'agent è stato usato principalmente per:
+
+\begin{itemize}
+    \item refattorizzazione guidata del codice;
+    \item aiuto nella comprensione del testo da un punto di vista concettuale e logico;
+    \item scrittura automatica di porzioni di codice ripetitive o comunque non fondamentali da un punto di vista progettuale (setter, controlli su input, strutture simmetriche);
+    \item discussione delle scelte implementative;
+    \item mantenimento del codice e della struttura coerente nel tempo, per evitare deragliamenti di stile che vanno al di fuori della formattazione (quella è stata gestita con un semplice file \texttt{.clang-format} e un formatter automatico all'interno dell'editor).
+\end{itemize}
+
+Questo sistema mi ha permesso di non delegare il ragionamento dietro al codice, per garantire una comprensione del progetto e del codice scritto mantenendo una velocità di sviluppo moderata nel tempo.
+
+\section{Conclusioni}
+
+Il progetto realizza un piccolo framework MapReduce locale in linguaggio C, utilizzabile da programmi esterni tramite l'interfaccia pubblica \texttt{mr.h}.
+
+Gli aspetti più delicati sono stati la gestione corretta dei descrittori, la propagazione dell'EOF, la serializzazione dei dati fra processi, l'ownership della memoria e la sincronizzazione dei thread. Il framework tratta i valori come dati opachi, quindi non dipende da un esempio specifico.
+
+I test automatici e il sistema di log sono stati usati per controllare il comportamento della libreria e rendere più semplice l'individuazione degli errori. Nel complesso il progetto ha permesso di applicare concetti tipici della programmazione UNIX e concorrente in un contesto più strutturato rispetto a un singolo programma sequenziale.
+
+\end{document}
